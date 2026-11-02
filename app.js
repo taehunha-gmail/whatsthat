@@ -1,6 +1,6 @@
 'use strict';
 /* 저게뭐야? v1 — 실시간 카메라에 보이는 건물·산 이름표
-   데이터: OpenStreetMap(Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
+   데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -75,6 +75,32 @@ async function overpass(q,label){
   }
   throw new Error('지도 서버 응답 없음');
 }
+/* 정적 타일 — 수도권(37.30~37.80°N·126.65~127.35°E)은 공개 Overpass 없이 이 사이트의 data/ 에서 받는다
+   (2026-11-02 행당역: 공개 서버 3곳이 모두 «at capacity»·무응답이라 이름표 0개) */
+const TILE='./data/'; let META=null;
+async function getJSON(u){const r=await fetch(u); if(!r.ok) throw new Error(r.status); return r.json();}
+async function tileEls(lat,lon){
+  S.fromTile=false;
+  try{META=META||await getJSON(TILE+'meta.json');}catch(e){return null;}
+  const [a0,a1,o0,o1]=META.bbox; if(lat<a0+0.015||lat>a1-0.015||lon<o0+0.02||lon>o1-0.02) return null;
+  status('건물 데이터 받는 중…');
+  const R=1500, dla=R/111320, dlo=R/(111320*Math.cos(lat*D2R)), keys=[];
+  for(let a=Math.floor((lat-dla)*100);a<=Math.floor((lat+dla)*100);a++) for(let o=Math.floor((lon-dlo)*100);o<=Math.floor((lon+dlo)*100);o++) keys.push([a,o]);
+  const els=[], kid=g=>g[0].lat.toFixed(4)+','+g[0].lon.toFixed(4);
+  const tg=(n,lv,h,apt)=>{const t={building:apt?'apartments':'yes'}; if(n)t.name=n; if(lv)t['building:levels']=String(lv); if(h)t.height=String(h); return t;};
+  const [cs,tall,pk]=await Promise.all([Promise.all(keys.map(([a,o])=>getJSON(`${TILE}t/${a}_${o}.json`).then(c=>[a,o,c]).catch(()=>null))),
+    (async()=>{const T=[],dl=9000/111320,dn=9000/(111320*Math.cos(lat*D2R)),q=[];
+      for(let a=Math.floor((lat-dl)*10);a<=Math.floor((lat+dl)*10);a++) for(let o=Math.floor((lon-dn)*10);o<=Math.floor((lon+dn)*10);o++) q.push(getJSON(`${TILE}tall/${a}_${o}.json`).then(v=>T.push(...v)).catch(()=>0));
+      await Promise.all(q); return T;})(), getJSON(TILE+'peaks.json').catch(()=>[])]);
+  for(const x of cs){ if(!x) continue; const [a,o,c]=x;
+    const geo=f=>{const g=[];for(let i=0;i<f.length;i+=2)g.push({lat:a/100+f[i]/1e5,lon:o/100+f[i+1]/1e5});return g;};
+    for(const [n,lv,h,apt,f] of c.b){const g=geo(f), d=bd(lat,lon,g[0].lat,g[0].lon)[1]; if(d>600&&!(n&&d<1500)) continue; els.push({type:'way',id:kid(g),tags:tg(n,lv,h,apt),geometry:g});}
+    for(const [n,f] of c.r){const g=geo(f); els.push({type:'way',id:'r'+kid(g),tags:{landuse:'residential',name:n},geometry:g});}
+  }
+  for(const [n,lv,h,apt,p] of tall){ if(bd(lat,lon,p[0][0],p[0][1])[1]>9000) continue; const g=p.map(([la,lo])=>({lat:la,lon:lo})); els.push({type:'way',id:kid(g),tags:tg(n,lv,h,apt),geometry:g});}
+  for(const [n,la,lo,e] of pk){ if(bd(lat,lon,la,lo)[1]<20000) els.push({type:'node',id:n+la,lat:la,lon:lo,tags:{natural:'peak',name:n,ele:String(e)}}); }
+  S.fromTile=true; return els;
+}
 /* 폰 안 저장소(IndexedDB) — 동네 데이터 재사용 */
 function idb(){return new Promise((ok,no)=>{const r=indexedDB.open('whatsthat',1);r.onupgradeneeded=()=>r.result.createObjectStore('area');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);});}
 async function cacheGet(k){try{const db=await idb();return await new Promise(ok=>{const q=db.transaction('area').objectStore('area').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>ok(null);});}catch(e){return null;}}
@@ -84,8 +110,10 @@ async function loadArea(){
   if(S.loading) return; S.loading=true;
   const {lat,lon}=S; const key=`v2:${lat.toFixed(3)},${lon.toFixed(3)}`;   // 약 100 m 칸
   try{
-    let els=await cacheGet(key);
-    if(els) status('저장된 동네 데이터 사용');
+    let els=await tileEls(lat,lon);
+    if(els) status(`우리 서버 건물 데이터 (${els.length}개)`);
+    else els=await cacheGet(key);
+    if(els){ if(!S.fromTile) status('저장된 동네 데이터 사용'); }
     else{
       const qs=[
         // 도심(광화문 등)은 1 km 전부·9 km 높이 있는 전부가 2~14 MB·40 초 넘게 걸려 늘 끊겼다 → 가까운 건 600 m, 먼 건 60 m·20층 이상만
