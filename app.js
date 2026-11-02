@@ -1,12 +1,12 @@
 'use strict';
-/* 저게뭐야? v1 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.5 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
 const S={lat:null,lon:null,acc:null,ground:0,eye:0,floor:1,blds:[],peaks:[],areas:[],
   alpha:null,beta:null,gamma:null,iosHdg:null,alphaOff:null,userOff:+(localStorage.hdgOff||0),
-  fov:+(localStorage.fov2||67),maxLabels:+(localStorage.maxLabels||14),showPeaks:true,loading:false,loadedAt:null,labels:[],names:new Map()};
+  fov:+(localStorage.fov2||67),maxLabels:+(localStorage.maxLabels||14),showPeaks:true,loading:false,loadedAt:null,labels:[],dots:[],shown:new Set(),pop:null,simple:localStorage.simple!=='0',names:new Map()};
 
 /* ---------- 기하 ---------- */
 const R=6371000, D2R=Math.PI/180;
@@ -197,20 +197,42 @@ function compute(){
   for(let y=0;y<h;y+=1)for(let x=0;x<w;x+=1){const i=(y*w+x)*4; if(data[i+3]<250) continue; const k=data[i]|(data[i+1]<<8)|(data[i+2]<<16); const b=shapes.get(k); if(!b) continue;
     cnt.set(k,(cnt.get(k)||0)+1); (sx.get(k)||sx.set(k,[]).get(k)).push(x); if(!top.has(k)||y<top.get(k)) top.set(k,y);}
   const vis=[...cnt.entries()].filter(([k,n])=>n>=6).sort((a,b)=>b[1]-a[1]);
-  const L=[]; const used=new Set();
+  // v3.5 간단 모드 — 같은 단지는 한 이름표, 기본 5개(고층·가운데 우선)·나머지는 점(톡 누르면 이름)
+  const cand=new Map();
   for(const [k,n] of vis){
     const b=shapes.get(k); if(b.d<40) continue;
-    const name=labelOf(b); if(!name||used.has(name)) continue; used.add(name);
+    const name=labelOf(b); if(!name) continue;
+    const grp=name.replace(/\s*(\d+|[A-Z])동?$/,'')||name;   // «서울숲한신더휴 101동»·«아크로서울포레스트 B» → 단지 이름
+    const c=cand.get(grp); if(c){ c.n++; c.area=Math.max(c.area,n); c.h=Math.max(c.h,b.h); continue; }
     const xs=sx.get(k).sort((a,b)=>a-b); const x=xs[xs.length>>1]/sc, y=top.get(k)/sc+6;
-    const lv=parseInt(b.t['building:levels']); L.push({x,y,name,sub:`${(b.d/1000).toFixed(1)} km`+(lv?` · ${lv}층`:(b.h>=60?` · ${Math.round(b.h)} m`:'')),peak:false});
-    if(L.length>=S.maxLabels) break;
+    const lv=parseInt(b.t['building:levels']);
+    cand.set(grp,{grp,name,x,y,area:n,n:1,h:b.h,d:b.d,lv});
   }
-  if(S.showPeaks) for(const p of S.peaks){
-    const q=project(B,p.az,elev(p.top-S.eye,p.d)); if(!q) continue; const [x,y]=q; if(x<0||x>VIEW.W||y<0||y>VIEW.H) continue;
-    const ox=Math.floor(x*sc),oy=Math.floor(y*sc),i=(oy*w+ox)*4; if(data[i+3]>0) continue;
-    L.push({x,y,name:p.name,sub:`${(p.d/1000).toFixed(1)} km · 해발 ${Math.round(p.top)} m`,peak:true});
+  const cx=VIEW.W/2;
+  const C=[...cand.values()].map(c=>{
+    const center=1+1.5*Math.max(0,1-Math.abs(c.x-cx)/cx);
+    c.score=Math.log2(1+c.area)*(1+c.h/40)*(c.d<300?0.3:1)*center*(S.shown.has(c.grp)?1.3:1);   // 1.3 = 깜빡임 방지
+    c.name=c.n>1?c.grp:c.name;
+    c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')));
+    return c;}).sort((a,b)=>b.score-a.score);
+  const cap=S.simple?5:S.maxLabels, popOn=S.pop&&S.pop.until>Date.now();
+  const L=[], dots=[];
+  for(const c of C){ const lab={x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp};
+    if(L.length<cap||(popOn&&S.pop.key===c.grp)) L.push(lab); else if(dots.length<12) dots.push(lab); }   // 점도 다음 12개까지만
+  if(S.showPeaks){ const P=[], seen=new Set();
+    for(const p of S.peaks){
+      const q=project(B,p.az,elev(p.top-S.eye,p.d)); if(!q) continue; const [x,y]=q; if(x<0||x>VIEW.W||y<0||y>VIEW.H) continue;
+      const ox=Math.floor(x*sc),oy=Math.floor(y*sc),i=(oy*w+ox)*4; if(data[i+3]>0) continue;
+      P.push({x,y,name:p.name,sub:`${(p.d/1000).toFixed(1)} km · 해발 ${Math.round(p.top)} m`,peak:true,key:'⛰'+p.name,top:p.top});
+    }
+    P.sort((a,b)=>b.top-a.top); const PU=P.filter(p=>!seen.has(p.name)&&seen.add(p.name));   // 같은 이름 봉우리는 높은 쪽만
+    PU.forEach((p,i)=>{ if(!S.simple||i<2) L.push(p); });   // 간단: 높은 산 2개
   }
-  S.labels=L;
+  S.labels=L; S.dots=S.simple?dots:[]; S.shown=new Set(L.map(l=>l.key));
+}
+function drawDots(g){
+  for(const l of S.dots){ g.fillStyle=l.peak?'rgba(255,214,10,.7)':'rgba(255,255,255,.7)'; g.beginPath(); g.arc(l.x,l.y,3.5,0,7); g.fill();
+    g.strokeStyle='rgba(0,0,0,.5)'; g.lineWidth=1; g.stroke(); }
 }
 
 /* ---------- 그리기 ---------- */
@@ -229,7 +251,7 @@ function drawLabels(g,L,scale=1){
   }
 }
 function frame(){
-  const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawLabels(g,S.labels);
+  const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawDots(g); drawLabels(g,S.labels);
   requestAnimationFrame(frame);
 }
 
@@ -312,4 +334,13 @@ $('setDone').onclick=()=>{$('setPanel').hidden=true;};
 $('floor2').onchange=e=>{S.floor=+e.target.value||1; S.eye=S.ground+(S.floor-1)*2.8+1.5;};
 $('showPeaks').onchange=e=>{S.showPeaks=e.target.checked;};
 $('maxLabels').value=S.maxLabels; $('maxV').textContent=S.maxLabels; $('maxLabels').oninput=e=>{S.maxLabels=+e.target.value;$('maxV').textContent=S.maxLabels;localStorage.maxLabels=S.maxLabels;};
+function modeBtn(){ $('mode').textContent=S.simple?'간단':'전부'; }
+$('mode').onclick=()=>{ S.simple=!S.simple; localStorage.simple=S.simple?'1':'0'; modeBtn(); status(S.simple?'이름표 간단 — 점을 누르면 이름':`이름표 전부(최대 ${S.maxLabels}개)`); compute(); };
+modeBtn();
+// 점 톡 → 4초간 그 이름표를 띄운다
+document.addEventListener('click',e=>{
+  if($('hud').hidden||e.target.closest('button,input,label,#setPanel,#calibPanel')) return;
+  let best=null,bd2=44*44; for(const l of S.dots){const d2=(l.x-e.clientX)**2+(l.y-e.clientY)**2; if(d2<bd2){bd2=d2;best=l;}}
+  if(best){ S.pop={key:best.key,until:Date.now()+4000}; compute(); }
+});
 $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hidden=true;};
