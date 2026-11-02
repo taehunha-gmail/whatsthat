@@ -292,7 +292,7 @@ function frame(){
 function status(s){S.msg=s; drawStatus();}
 function drawStatus(){
   const gps=S.lat==null?'📍✗':`📍±${Math.round(S.acc)}m`;
-  const ori=S.beta==null?'🧭✗':`🧭${Math.round(headingOf((camBasis()||{v:[0,1,0]}).v))}°`;
+  const cb=camBasis()||{v:[0,1,0]}; const ori=S.beta==null?'🧭✗':`🧭${Math.round(headingOf(cb.v))}° ↕${Math.round(Math.asin(Math.max(-1,Math.min(1,cb.v[2])))/D2R)}°`;   // ↕ = 위로 든 각도(v3.6)
   const data=S.blds.length?`🏢${S.blds.length}`:(S.loading?'🏢…':'🏢✗');
   const kk=geocoder?'K✓':'K…';
   $('status').textContent=`${gps} ${ori} ${data} ${kk} 🏷${S.labels.length}`+(S.msg?` · ${S.msg}`:'');
