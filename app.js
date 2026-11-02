@@ -247,7 +247,8 @@ function onOri(e){
   if(e.alpha==null) return;
   S.alpha=e.alpha; S.beta=e.beta; S.gamma=e.gamma;
   if(typeof e.webkitCompassHeading==='number'){ // iOS: 나침반으로 alpha 기준을 맞춘다(자북→진북)
-    const want=(e.webkitCompassHeading+DECL+360)%360, raw=rawHeading();
+    // iOS 나침반은 세로 기준 «기기 위쪽» 방향이다 — 가로로 들면 카메라와 90° 어긋나므로 화면 회전각을 더한다(v3.4)
+    const want=(e.webkitCompassHeading+scrAngle()+DECL+720)%360, raw=rawHeading();
     const off=-(((want-raw+540)%360)-180);      // 시계 방향 차이 → alpha 감소
     S.alphaOff = S.alphaOff==null?off:S.alphaOff+0.05*(((off-S.alphaOff+540)%360)-180);
   } else if(e.absolute){ S.alphaOff=0; }
