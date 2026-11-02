@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1a3a">
+<title>저게뭐야?</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="overlay"></canvas>
+
+<div id="start">
+  <img src="icon-512.png" alt="" class="logo">
+  <h1>저게뭐야?</h1>
+  <p>카메라를 들면 보이는 건물·산에 이름표가 붙습니다.</p>
+  <label class="floor">지금 몇 층? <input id="floor" type="number" min="1" max="120" value="1"> 층</label>
+  <button id="go">시작</button>
+  <p class="small">카메라 · 위치 · 동작 센서 권한을 묻습니다.<br>사진은 폰 밖으로 나가지 않습니다.</p>
+</div>
+
+<div id="hud" hidden>
+  <div id="status">위치 찾는 중…</div>
+  <div id="bar">
+    <button id="calib" title="방향 맞추기">🧭</button>
+    <button id="shot" class="shot" title="찰칵"></button>
+    <button id="settings" title="설정">⚙︎</button>
+  </div>
+</div>
+
+<div id="calibPanel" hidden>
+  <p><b>방향 맞추기</b> — 아는 건물(예: 롯데타워)을 화면 가운데 <b>+</b>에 두고 그 이름을 누르세요. 또는 막대로 돌리세요.</p>
+  <div id="calibList"></div>
+  <label>방향 <input id="hdg" type="range" min="-60" max="60" step="0.5" value="0"> <span id="hdgV">0°</span></label>
+  <label>화각 <input id="fov" type="range" min="50" max="85" step="0.5" value="67"> <span id="fovV">67°</span></label>
+  <button id="calibDone">완료</button>
+</div>
+<div id="cross" hidden>+</div>
+
+<div id="setPanel" hidden>
+  <label>층수 <input id="floor2" type="number" min="1" max="120" value="1"></label>
+  <label><input id="showPeaks" type="checkbox" checked> 산 이름</label>
+  <label>이름표 개수 <input id="maxLabels" type="range" min="5" max="30" value="14"> <span id="maxV">14</span></label>
+  <button id="reload">주변 건물 다시 불러오기</button>
+  <button id="setDone">닫기</button>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
