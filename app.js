@@ -20,8 +20,11 @@ function camBasis(){ // deviceorientation → 카메라 앞·오른쪽·위 벡�
   const r=[cA*cG-sA*sB*sG, sA*cG+cA*sB*sG, -cB*sG];
   const u=[-sA*cB, cA*cB, sB];
   const v=[-(cA*sG+sA*sB*cG), -(sA*sG-cA*sB*cG), -cB*cG];
-  return {r,u,v};
+  const th=scrAngle()*D2R; if(!th) return {r,u,v};   // 가로로 들면 화면 오른쪽·위가 기기 축과 90° 돈다
+  const c=Math.cos(th),s=Math.sin(th);
+  return {r:r.map((x,i)=>x*c-u[i]*s), u:r.map((x,i)=>x*s+u[i]*c), v};
 }
+function scrAngle(){const a=(screen.orientation&&typeof screen.orientation.angle==='number')?screen.orientation.angle:(+window.orientation||0);return ((a%360)+360)%360;}
 function headingOf(v){return ((Math.atan2(v[0],v[1])/D2R)+360)%360;}
 function rawHeading(){ // alphaOff 없이
   const A=S.alpha*D2R,B=S.beta*D2R,G=S.gamma*D2R,cA=Math.cos(A),sA=Math.sin(A),cB=Math.cos(B),sB=Math.sin(B),cG=Math.cos(G),sG=Math.sin(G);
@@ -65,7 +68,7 @@ const OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.priv
 let opIdx=0;
 async function overpass(q,label){
   for(let t=0;t<9;t++){
-    const url=OVERPASS[(opIdx+t)%OVERPASS.length]; const ac=new AbortController(); const to=setTimeout(()=>ac.abort(),25000);
+    const url=OVERPASS[(opIdx+t)%OVERPASS.length]; const ac=new AbortController(); const to=setTimeout(()=>ac.abort(),90000);
     try{const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal});
       clearTimeout(to); if(r.ok){const j=await r.json(); if(j.elements){opIdx=(opIdx+t)%OVERPASS.length; return j.elements;}}}catch(e){clearTimeout(to);}
     status(`${label} — 지도 서버 붐빔, 다른 서버로 재시도 ${t+1}/9`); await new Promise(z=>setTimeout(z,1500+1500*t));
@@ -79,15 +82,16 @@ async function cachePut(k,v){try{const db=await idb();db.transaction('area','rea
 function ht(t,def){for(const k of ['height','building:height']){const v=parseFloat(t[k]);if(v>0)return v;} const l=parseFloat(t['building:levels']); return l>0?l*3:def;}
 async function loadArea(){
   if(S.loading) return; S.loading=true;
-  const {lat,lon}=S; const key=`${lat.toFixed(3)},${lon.toFixed(3)}`;   // 약 100 m 칸
+  const {lat,lon}=S; const key=`v2:${lat.toFixed(3)},${lon.toFixed(3)}`;   // 약 100 m 칸
   try{
     let els=await cacheGet(key);
     if(els) status('저장된 동네 데이터 사용');
     else{
       const qs=[
-        ['가까운 건물 1/3',`[out:json][timeout:25];way["building"](around:1000,${lat},${lon});out geom tags;`],
-        ['먼 고층 2/3',`[out:json][timeout:25];(way["building"]["name"](around:5000,${lat},${lon});way["building"]["height"](around:9000,${lat},${lon}););out geom tags;`],
-        ['단지·산 3/3',`[out:json][timeout:25];(way["landuse"="residential"]["name"](around:2500,${lat},${lon});node["natural"="peak"]["name"](around:20000,${lat},${lon}););out geom tags;`]];
+        // 도심(광화문 등)은 1 km 전부·9 km 높이 있는 전부가 2~14 MB·40 초 넘게 걸려 늘 끊겼다 → 가까운 건 600 m, 먼 건 60 m·20층 이상만
+        ['가까운 건물 1/3',`[out:json][timeout:80];way["building"](around:600,${lat},${lon});out geom tags;`],
+        ['먼 고층 2/3',`[out:json][timeout:80];(way["building"]["name"](around:1500,${lat},${lon});way["building"]["height"~"^([6-9][0-9]|[1-9][0-9][0-9])([.][0-9]+)?( m)?$"](around:9000,${lat},${lon});way["building"]["building:levels"~"^([2-9][0-9]|1[0-9][0-9])$"](around:9000,${lat},${lon}););out geom tags;`],
+        ['단지·산 3/3',`[out:json][timeout:80];(way["landuse"="residential"]["name"](around:1500,${lat},${lon});node["natural"="peak"]["name"](around:20000,${lat},${lon}););out geom tags;`]];
       els=[];
       for(const [lb,q] of qs){ status(lb+' 받는 중…'); els=els.concat(await overpass(q,lb)); }
       cachePut(key,els);
@@ -167,7 +171,7 @@ function compute(){
   const vis=[...cnt.entries()].filter(([k,n])=>n>=6).sort((a,b)=>b[1]-a[1]);
   const L=[]; const used=new Set();
   for(const [k,n] of vis){
-    const b=shapes.get(k); if(b.d<120) continue;
+    const b=shapes.get(k); if(b.d<40) continue;
     const name=labelOf(b); if(!name||used.has(name)) continue; used.add(name);
     const xs=sx.get(k).sort((a,b)=>a-b); const x=xs[xs.length>>1]/sc, y=top.get(k)/sc+6;
     const lv=parseInt(b.t['building:levels']); L.push({x,y,name,sub:`${(b.d/1000).toFixed(1)} km`+(lv?` · ${lv}층`:(b.h>=60?` · ${Math.round(b.h)} m`:'')),peak:false});
@@ -229,7 +233,7 @@ async function start(){
   // 동작 센서 권한(iOS)은 탭 직후에 바로 요청 — 카메라보다 먼저 띄워야 창이 뜬다
   let oriP=null; try{ if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission) oriP=DeviceOrientationEvent.requestPermission(); }catch(e){ S.oriErr=e.name||'err'; }
   try{
-    const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
     const v=$('cam'); v.srcObject=st; v.setAttribute('playsinline',''); v.muted=true; await v.play().catch(()=>{});
   }catch(e){ err('카메라를 켤 수 없어요: '+(e.name||'')+' '+(e.message||'')+(INAPP?'<br>카카오톡·네이버 앱 안의 브라우저에서는 막힐 수 있어요. <b>사파리로 열기</b>를 눌러 주세요.':'<br>설정 → 사파리 → 카메라 → 허용을 확인해 주세요.')); return; }
   try{ if(oriP){ const r=await oriP; S.oriPerm=r; } }catch(e){ S.oriPerm='error'; }
@@ -252,6 +256,7 @@ async function shot(){
   g.drawImage(v,(c.width-dw)/2,(c.height-dh)/2,dw,dh);
   g.save(); g.scale(k,k); drawLabels(g,S.labels); g.restore();
   g.font=`600 ${14*k}px sans-serif`; g.fillStyle='rgba(255,255,255,.8)'; g.textAlign='right'; g.fillText('저게뭐야?',c.width-12*k,c.height-12*k);
+  g.font=`${10*k}px sans-serif`; g.textAlign='left'; g.fillStyle='rgba(255,255,255,.6)'; g.fillText($('status').textContent.slice(0,90),10*k,c.height-12*k);
   const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',0.9));
   const f=new File([blob],`저게뭐야_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'')}.jpg`,{type:'image/jpeg'});
   if(navigator.canShare&&navigator.canShare({files:[f]})){ try{await navigator.share({files:[f]});return;}catch(e){} }
