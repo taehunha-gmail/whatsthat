@@ -13,7 +13,8 @@ const R=6371000, D2R=Math.PI/180;
 function bd(lat0,lon0,lat,lon){const y=(lat-lat0)*111320,x=(lon-lon0)*111320*Math.cos(lat0*D2R);return [((Math.atan2(x,y)/D2R)+360)%360,Math.hypot(x,y)];}
 function elev(dh,d){return Math.atan2(dh-d*d*(1-0.13)/(2*R),d)/D2R;}
 function camBasis(){ // deviceorientation → 카메라 앞·오른쪽·위 벡터(세계: x동 y북 z위)
-  if(S.beta==null) return null;
+  if(S.beta==null){ if(!S.manual) return null; const h=((S.userOff%360)+360)%360*D2R; // 센서 없음: 수평으로 든 폰, 방향 = 보정값
+    return {v:[Math.sin(h),Math.cos(h),0], r:[Math.cos(h),-Math.sin(h),0], u:[0,0,1]}; }
   let a=S.alpha; if(S.alphaOff!=null) a=a+S.alphaOff; a=a-S.userOff; // 시계 방향 보정 = alpha 감소
   const A=a*D2R,B=S.beta*D2R,G=S.gamma*D2R,cA=Math.cos(A),sA=Math.sin(A),cB=Math.cos(B),sB=Math.sin(B),cG=Math.cos(G),sG=Math.sin(G);
   const r=[cA*cG-sA*sB*sG, sA*cG+cA*sB*sG, -cB*sG];
@@ -61,22 +62,36 @@ async function ele(lat,lon){
 
 /* ---------- 주변 데이터 ---------- */
 const OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
-async function overpass(q){
-  for(let t=0;t<6;t++){
-    const url=OVERPASS[t%OVERPASS.length];
-    try{const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-      if(r.ok){const j=await r.json(); if(j.elements) return j.elements;}}catch(e){}
-    status(`지도 서버가 바빠요… 다시 시도(${t+1})`); await new Promise(z=>setTimeout(z,2000*(t+1)));
+let opIdx=0;
+async function overpass(q,label){
+  for(let t=0;t<9;t++){
+    const url=OVERPASS[(opIdx+t)%OVERPASS.length]; const ac=new AbortController(); const to=setTimeout(()=>ac.abort(),25000);
+    try{const r=await fetch(url,{method:'POST',body:'data='+encodeURIComponent(q),headers:{'Content-Type':'application/x-www-form-urlencoded'},signal:ac.signal});
+      clearTimeout(to); if(r.ok){const j=await r.json(); if(j.elements){opIdx=(opIdx+t)%OVERPASS.length; return j.elements;}}}catch(e){clearTimeout(to);}
+    status(`${label} — 지도 서버 붐빔, 다른 서버로 재시도 ${t+1}/9`); await new Promise(z=>setTimeout(z,1500+1500*t));
   }
   throw new Error('지도 서버 응답 없음');
 }
+/* 폰 안 저장소(IndexedDB) — 동네 데이터 재사용 */
+function idb(){return new Promise((ok,no)=>{const r=indexedDB.open('whatsthat',1);r.onupgradeneeded=()=>r.result.createObjectStore('area');r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);});}
+async function cacheGet(k){try{const db=await idb();return await new Promise(ok=>{const q=db.transaction('area').objectStore('area').get(k);q.onsuccess=()=>ok(q.result);q.onerror=()=>ok(null);});}catch(e){return null;}}
+async function cachePut(k,v){try{const db=await idb();db.transaction('area','readwrite').objectStore('area').put(v,k);}catch(e){}}
 function ht(t,def){for(const k of ['height','building:height']){const v=parseFloat(t[k]);if(v>0)return v;} const l=parseFloat(t['building:levels']); return l>0?l*3:def;}
 async function loadArea(){
-  if(S.loading) return; S.loading=true; status('주변 건물 불러오는 중…');
-  const {lat,lon}=S;
-  const q=`[out:json][timeout:60];(way["building"](around:1300,${lat},${lon});way["building"]["name"](around:5000,${lat},${lon});way["building"]["height"](around:9000,${lat},${lon});way["landuse"="residential"]["name"](around:2500,${lat},${lon});node["natural"="peak"]["name"](around:20000,${lat},${lon}););out geom tags;`;
+  if(S.loading) return; S.loading=true;
+  const {lat,lon}=S; const key=`${lat.toFixed(3)},${lon.toFixed(3)}`;   // 약 100 m 칸
   try{
-    const els=await overpass(q);
+    let els=await cacheGet(key);
+    if(els) status('저장된 동네 데이터 사용');
+    else{
+      const qs=[
+        ['가까운 건물 1/3',`[out:json][timeout:25];way["building"](around:1000,${lat},${lon});out geom tags;`],
+        ['먼 고층 2/3',`[out:json][timeout:25];(way["building"]["name"](around:5000,${lat},${lon});way["building"]["height"](around:9000,${lat},${lon}););out geom tags;`],
+        ['단지·산 3/3',`[out:json][timeout:25];(way["landuse"="residential"]["name"](around:2500,${lat},${lon});node["natural"="peak"]["name"](around:20000,${lat},${lon}););out geom tags;`]];
+      els=[];
+      for(const [lb,q] of qs){ status(lb+' 받는 중…'); els=els.concat(await overpass(q,lb)); }
+      cachePut(key,els);
+    }
     S.ground=(await ele(lat,lon))??0; S.eye=S.ground+(S.floor-1)*2.8+1.5;
     const blds=[],areas=[],peaks=[]; const seen=new Set();
     for(const e of els){
@@ -92,11 +107,10 @@ async function loadArea(){
     }
     status(`지형 높이 계산 중… (${blds.length}동)`);
     await Promise.all(blds.map(async b=>{b.ground=(await ele(b.c[0],b.c[1]))??S.ground;}));
-    blds.sort((a,b)=>b.d-a.d);                   // 먼 것부터 그린다
-    blds.forEach((b,i)=>b.key=i+1);
+    blds.sort((a,b)=>b.d-a.d); blds.forEach((b,i)=>b.key=i+1);
     S.blds=blds; S.areas=areas; S.peaks=peaks; S.loadedAt=[lat,lon];
-    status(`건물 ${blds.length} · 산 ${peaks.length} · 눈높이 해발 ${Math.round(S.eye)} m`);
-  }catch(e){status('불러오기 실패 — ⚙︎에서 다시 시도');}
+    status(`눈높이 해발 ${Math.round(S.eye)} m`);
+  }catch(e){status('지도 서버가 계속 붐벼요 — 잠시 뒤 ⚙︎ → 다시 불러오기');}
   S.loading=false;
 }
 function inside(lat,lon,poly){let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const[yi,xi]=poly[i],[yj,xj]=poly[j];if((yi>lat)!==(yj>lat)&&lon<(xj-xi)*(lat-yi)/(yj-yi+1e-12)+xi)c=!c;}return c;}
@@ -188,7 +202,15 @@ function frame(){
 }
 
 /* ---------- 센서 ---------- */
-function status(s){$('status').textContent=s;}
+function status(s){S.msg=s; drawStatus();}
+function drawStatus(){
+  const gps=S.lat==null?'📍✗':`📍±${Math.round(S.acc)}m`;
+  const ori=S.beta==null?'🧭✗':`🧭${Math.round(headingOf((camBasis()||{v:[0,1,0]}).v))}°`;
+  const data=S.blds.length?`🏢${S.blds.length}`:(S.loading?'🏢…':'🏢✗');
+  const kk=geocoder?'K✓':'K…';
+  $('status').textContent=`${gps} ${ori} ${data} ${kk} 🏷${S.labels.length}`+(S.msg?` · ${S.msg}`:'');
+}
+setInterval(()=>{ if(!$('hud').hidden) drawStatus(); },500);
 function onOri(e){
   if(e.alpha==null) return;
   S.alpha=e.alpha; S.beta=e.beta; S.gamma=e.gamma;
@@ -205,12 +227,13 @@ async function start(){
   if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     err('이 화면에서는 카메라를 쓸 수 없어요.<br><b>사파리(또는 크롬)</b>에서 열어 주세요.<br>https://taehunha-gmail.github.io/whatsthat/'); return; }
   // 동작 센서 권한(iOS)은 탭 직후에 바로 요청 — 카메라보다 먼저 띄워야 창이 뜬다
-  let oriP=null; try{ if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission) oriP=DeviceOrientationEvent.requestPermission(); }catch(e){}
+  let oriP=null; try{ if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission) oriP=DeviceOrientationEvent.requestPermission(); }catch(e){ S.oriErr=e.name||'err'; }
   try{
     const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
     const v=$('cam'); v.srcObject=st; v.setAttribute('playsinline',''); v.muted=true; await v.play().catch(()=>{});
   }catch(e){ err('카메라를 켤 수 없어요: '+(e.name||'')+' '+(e.message||'')+(INAPP?'<br>카카오톡·네이버 앱 안의 브라우저에서는 막힐 수 있어요. <b>사파리로 열기</b>를 눌러 주세요.':'<br>설정 → 사파리 → 카메라 → 허용을 확인해 주세요.')); return; }
-  try{ if(oriP){ const r=await oriP; if(r!=='granted') status('동작 센서가 꺼져 있어 방향을 못 잡아요 (🧭로 수동 보정)'); } }catch(e){}
+  try{ if(oriP){ const r=await oriP; S.oriPerm=r; } }catch(e){ S.oriPerm='error'; }
+  setTimeout(()=>{ if(S.beta==null) $('sensor').hidden=false; },1500);
   $('start').hidden=true; $('hud').hidden=false;
   addEventListener('deviceorientationabsolute',onOri,true); addEventListener('deviceorientation',onOri,true);
   $('cam').addEventListener('loadedmetadata',updateView); addEventListener('resize',updateView); updateView();
@@ -244,7 +267,9 @@ function openCalib(){
       const B=camBasis(); if(!B) return; const cur=headingOf(B.v); const d=((b.az-cur+540)%360)-180; S.userOff+=d; $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°'; localStorage.hdgOff=S.userOff; };
     list.appendChild(bt);}
 }
-$('go').onclick=start; $('shot').onclick=shot; $('calib').onclick=openCalib;
+$('go').onclick=start;
+$('sensor').onclick=async()=>{ try{ const r=await DeviceOrientationEvent.requestPermission(); S.oriPerm=r; if(r==='granted'){ $('sensor').hidden=true; return; } }catch(e){ S.oriPerm='error'; }
+  S.manual=true; $('sensor').hidden=true; status('센서 없이: 🧭에서 방향을 맞추세요'); }; $('shot').onclick=shot; $('calib').onclick=openCalib;
 $('calibDone').onclick=()=>{$('calibPanel').hidden=true;$('cross').hidden=true;};
 $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff+'°'; $('hdg').oninput=e=>{S.userOff=+e.target.value;$('hdgV').textContent=S.userOff+'°';localStorage.hdgOff=S.userOff;};
 $('fov').value=S.fov; $('fovV').textContent=S.fov+'°'; $('fov').oninput=e=>{S.fov=+e.target.value;$('fovV').textContent=S.fov+'°';localStorage.fov2=S.fov;updateView();};

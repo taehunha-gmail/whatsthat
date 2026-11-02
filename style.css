@@ -23,3 +23,5 @@ button{font:inherit;border:0;border-radius:14px;padding:12px 22px;background:#00
 #calibList button{padding:6px 10px;font-size:13px;border-radius:10px;background:#334}
 #cross{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);font-size:44px;color:#ffd60a;text-shadow:0 0 6px #000;pointer-events:none}
 #err{position:fixed;left:12px;right:12px;top:40%;background:rgba(180,30,40,.92);padding:14px;border-radius:14px;font-size:14px;line-height:1.5;z-index:9}
+#sensor{position:fixed;left:50%;top:46%;transform:translateX(-50%);z-index:8;font-size:18px;padding:14px 22px}
+#status{max-width:94vw;overflow:hidden;text-overflow:ellipsis}
