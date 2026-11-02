@@ -198,13 +198,19 @@ function onOri(e){
     S.alphaOff = S.alphaOff==null?off:S.alphaOff+0.05*(((off-S.alphaOff+540)%360)-180);
   } else if(e.absolute){ S.alphaOff=0; }
 }
+function err(msg){const e=$('err'); e.innerHTML=msg; e.hidden=false;}
+const INAPP=/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\/|DaumApps|GSA\//i.test(navigator.userAgent);
 async function start(){
   S.floor=+$('floor').value||1; $('floor2').value=S.floor;
-  try{ if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission) await DeviceOrientationEvent.requestPermission(); }catch(e){}
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    err('이 화면에서는 카메라를 쓸 수 없어요.<br><b>사파리(또는 크롬)</b>에서 열어 주세요.<br>https://taehunha-gmail.github.io/whatsthat/'); return; }
+  // 동작 센서 권한(iOS)은 탭 직후에 바로 요청 — 카메라보다 먼저 띄워야 창이 뜬다
+  let oriP=null; try{ if(window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission) oriP=DeviceOrientationEvent.requestPermission(); }catch(e){}
   try{
-    const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});
-    $('cam').srcObject=st; await $('cam').play();
-  }catch(e){ alert('카메라를 켤 수 없습니다: '+e.message); return; }
+    const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false});
+    const v=$('cam'); v.srcObject=st; v.setAttribute('playsinline',''); v.muted=true; await v.play().catch(()=>{});
+  }catch(e){ err('카메라를 켤 수 없어요: '+(e.name||'')+' '+(e.message||'')+(INAPP?'<br>카카오톡·네이버 앱 안의 브라우저에서는 막힐 수 있어요. <b>사파리로 열기</b>를 눌러 주세요.':'<br>설정 → 사파리 → 카메라 → 허용을 확인해 주세요.')); return; }
+  try{ if(oriP){ const r=await oriP; if(r!=='granted') status('동작 센서가 꺼져 있어 방향을 못 잡아요 (🧭로 수동 보정)'); } }catch(e){}
   $('start').hidden=true; $('hud').hidden=false;
   addEventListener('deviceorientationabsolute',onOri,true); addEventListener('deviceorientation',onOri,true);
   $('cam').addEventListener('loadedmetadata',updateView); addEventListener('resize',updateView); updateView();
