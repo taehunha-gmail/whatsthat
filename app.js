@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.5 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.6 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -62,6 +62,27 @@ async function ele(lat,lon){
   const px=Math.min(255,Math.floor((fx-x)*256)),py=Math.min(255,Math.floor((fy-y)*256)),i=(py*256+px)*4;
   return d[i]*256+d[i+1]+d[i+2]/256-32768;
 }
+// v3.6 지형 — 30 m 격자(SRTM) 는 평지 도심에서 칸마다 ±5~10 m 출렁인다(성수중 12 m·바로 옆 성수고 21 m).
+// 9×9 칸(약 130 m) 중앙값으로 고르고, 관측점과의 차이 5 m 까지는 잡음으로 보고 뺀다 — 응봉산 같은 진짜 언덕은 남는다
+const demData=new Map();   // 받은 지형 칸(동기 조회용)
+function eleSync(lat,lon){
+  const n=2**DEMZ, fx=(lon+180)/360*n, fy=(1-Math.asinh(Math.tan(lat*D2R))/Math.PI)/2*n;
+  const x=Math.floor(fx),y=Math.floor(fy), d=demData.get(x+'/'+y); if(!d) return null;
+  const i=(Math.min(255,Math.floor((fy-y)*256))*256+Math.min(255,Math.floor((fx-x)*256)))*4;
+  return d[i]*256+d[i+1]+d[i+2]/256-32768;
+}
+async function demLoad(lat0,lat1,lon0,lon1){ // 범위 안 지형 칸을 미리 받아 둔다
+  const n=2**DEMZ, tx=lon=>Math.floor((lon+180)/360*n), ty=lat=>Math.floor((1-Math.asinh(Math.tan(lat*D2R))/Math.PI)/2*n), q=[];
+  for(let x=tx(lon0);x<=tx(lon1);x++) for(let y=ty(lat1);y<=ty(lat0);y++) q.push(demTile(x,y).then(d=>{if(d) demData.set(x+'/'+y,d);}));
+  await Promise.all(q);
+}
+function eleS(lat,lon){
+  const st=15.2/111320, sn=15.2/(111320*Math.cos(lat*D2R)), v=[];
+  for(let i=-4;i<=4;i++) for(let j=-4;j<=4;j++){ const e=eleSync(lat+i*st,lon+j*sn); if(e!=null) v.push(e); }
+  if(!v.length) return null; v.sort((a,b)=>a-b); return v[v.length>>1];
+}
+const DEM_NOISE=5;
+function relGround(g){ const dg=g-S.ground; return S.ground+Math.sign(dg)*Math.max(0,Math.abs(dg)-DEM_NOISE); }
 
 /* ---------- 주변 데이터 ---------- */
 const OVERPASS=['https://overpass-api.de/api/interpreter','https://overpass.private.coffee/api/interpreter','https://overpass.kumi.systems/api/interpreter'];
@@ -124,7 +145,8 @@ async function loadArea(){
       for(const [lb,q] of qs){ status(lb+' 받는 중…'); els=els.concat(await overpass(q,lb)); }
       cachePut(key,els);
     }
-    S.ground=(await ele(lat,lon))??0; S.eye=S.ground+(S.floor-1)*2.8+1.5;
+    { const dl=10000/111320, dn=10000/(111320*Math.cos(lat*D2R)); await demLoad(lat-dl,lat+dl,lon-dn,lon+dn); }
+    S.ground=eleS(lat,lon)??0; S.eye=S.ground+(S.floor-1)*2.8+1.5;
     const blds=[],areas=[],peaks=[]; const seen=new Set();
     for(const e of els){
       if(seen.has(e.type+e.id)) continue; seen.add(e.type+e.id);
@@ -133,18 +155,24 @@ async function loadArea(){
       const g=e.geometry; if(!g||g.length<3) continue;
       if(t.landuse==='residential'){areas.push({name:t.name,poly:g.map(p=>[p.lat,p.lon])}); continue;}
       const cl=g.reduce((s,p)=>s+p.lat,0)/g.length, cn=g.reduce((s,p)=>s+p.lon,0)/g.length;
-      const [a,d]=bd(lat,lon,cl,cn); if(d<35) continue;
+      const [a,d]=bd(lat,lon,cl,cn);
+      // v3.6 골목에서는 바로 옆 벽이 시야를 다 가린다 — 가까운 건물도 가림에 넣는다(이름표는 40 m 밖만).
+      // 내가 그 건물 안이면(실내·GPS 오차) 빼고, 2층 이상 실내면 25 m 안 건물도 뺀다
+      const poly=g.map(p=>[p.lat,p.lon]); if(inside(lat,lon,poly)) continue; if(S.floor>1&&d<25) continue;
       const h=ht(t,t.building==='apartments'?45:10);
-      blds.push({id:e.id,t,c:[cl,cn],az:a,d,h,pts:g.map(p=>bd(lat,lon,p.lat,p.lon))});
+      blds.push({id:e.id,t,c:[cl,cn],az:a,d,h,pts:(d<150?dense(g,3):g).map(p=>bd(lat,lon,p.lat,p.lon))});
     }
     status(`지형 높이 계산 중… (${blds.length}동)`);
-    await Promise.all(blds.map(async b=>{b.ground=(await ele(b.c[0],b.c[1]))??S.ground;}));
+    for(const b of blds){const g=eleS(b.c[0],b.c[1]); b.ground=g==null?S.ground:relGround(g);}
     blds.sort((a,b)=>b.d-a.d); blds.forEach((b,i)=>b.key=i+1);
     S.blds=blds; S.areas=areas; S.peaks=peaks; S.loadedAt=[lat,lon];
     status(`눈높이 해발 ${Math.round(S.eye)} m`);
   }catch(e){status('지도 서버가 계속 붐벼요 — 잠시 뒤 ⚙︎ → 다시 불러오기');}
   S.loading=false;
 }
+function dense(g,step){ // 가까운 건물은 변을 3 m 마다 쪼갠다 — 옆으로 지나가는 벽이 화면 가장자리까지 이어지게
+  const o=[]; for(let i=0;i<g.length;i++){const p=g[i],q=g[(i+1)%g.length]; const L=Math.hypot((q.lat-p.lat)*111320,(q.lon-p.lon)*88300), n=Math.max(1,Math.ceil(L/step));
+    for(let k=0;k<n;k++) o.push({lat:p.lat+(q.lat-p.lat)*k/n,lon:p.lon+(q.lon-p.lon)*k/n});} return o; }
 function inside(lat,lon,poly){let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const[yi,xi]=poly[i],[yj,xj]=poly[j];if((yi>lat)!==(yj>lat)&&lon<(xj-xi)*(lat-yi)/(yj-yi+1e-12)+xi)c=!c;}return c;}
 const BAD=/^([A-Z]|\d+|제?\d+동|.*\d+동|[가-힣]?\d+[동호]?)$/;
 
@@ -191,10 +219,11 @@ function compute(){
     let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9; for(const[x,y]of H_){minx=Math.min(minx,x);maxx=Math.max(maxx,x);miny=Math.min(miny,y);maxy=Math.max(maxy,y);}
     if(maxx<0||minx>w||maxy<0||miny>h) continue;
     og.fillStyle=`rgb(${b.key&255},${(b.key>>8)&255},${(b.key>>16)&255})`; og.beginPath(); H_.forEach(([x,y],i)=>i?og.lineTo(x,y):og.moveTo(x,y)); og.closePath(); og.fill();
-    shapes.set(b.key,b);
+    b.bb=[minx-1,maxx+1,miny-1,maxy+1]; shapes.set(b.key,b);
   }
   const data=og.getImageData(0,0,w,h).data; const cnt=new Map(), sx=new Map(), top=new Map();
   for(let y=0;y<h;y+=1)for(let x=0;x<w;x+=1){const i=(y*w+x)*4; if(data[i+3]<250) continue; const k=data[i]|(data[i+1]<<8)|(data[i+2]<<16); const b=shapes.get(k); if(!b) continue;
+    if(x<b.bb[0]||x>b.bb[1]||y<b.bb[2]||y>b.bb[3]) continue;   // v3.6 경계 섞임 색 = 엉뚱한 건물 번호 → 제 윤곽 밖이면 버린다
     cnt.set(k,(cnt.get(k)||0)+1); (sx.get(k)||sx.set(k,[]).get(k)).push(x); if(!top.has(k)||y<top.get(k)) top.set(k,y);}
   const vis=[...cnt.entries()].filter(([k,n])=>n>=6).sort((a,b)=>b[1]-a[1]);
   // v3.5 간단 모드 — 같은 단지는 한 이름표, 기본 5개(고층·가운데 우선)·나머지는 점(톡 누르면 이름)
@@ -229,6 +258,10 @@ function compute(){
     PU.forEach((p,i)=>{ if(!S.simple||i<2) L.push(p); });   // 간단: 높은 산 2개
   }
   S.labels=L; S.dots=S.simple?dots:[]; S.shown=new Set(L.map(l=>l.key));
+  // v3.6 골목: 바로 옆 벽이 화면 대부분이면 «가려 있음»을 알린다(이름표 0개가 고장으로 보이지 않게)
+  let near=0; for(const [k,n] of cnt) if(shapes.get(k).d<40) near+=n;
+  const blocked=!L.some(l=>!l.peak)&&near>0.35*w*h, hint='가까운 건물에 가려 있어요 — 트인 쪽을 비춰 보세요';
+  if(blocked&&S.msg!==hint) status(hint); else if(!blocked&&S.msg===hint) status(`눈높이 해발 ${Math.round(S.eye)} m`);
 }
 function drawDots(g){
   for(const l of S.dots){ g.fillStyle=l.peak?'rgba(255,214,10,.7)':'rgba(255,255,255,.7)'; g.beginPath(); g.arc(l.x,l.y,3.5,0,7); g.fill();
