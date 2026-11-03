@@ -1,4 +1,4 @@
-// 저게뭐야 «찍고 확인» 중계 Worker — Gemini 가 써 준 판을 바탕으로 4곳 손봄(주석 ★)
+// 저게뭐야 «찍고 확인» 중계 Worker — 주석 ★ = 손본 곳
 const ALLOWED_ORIGIN = "https://taehunha-gmail.github.io";
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB
 
@@ -40,14 +40,25 @@ export default {
 [후보 건물 목록]
 ${JSON.stringify(cands)}`;
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent`;
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
                    generationConfig: { response_mime_type: "application/json" } };
     try {
       // ★3 키는 주소(?key=) 대신 헤더로 — 주소는 로그에 남기 쉬움
-      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body) });
-      // ★4 실패 이유를 앱에 돌려준다(빈 결과만 오면 왜 안 되는지 알 수 없음) — 앱 상태줄에 «AI 오류 — …»로 보임
-      if (!r.ok) return reply({ labels: [], error: `Gemini ${r.status}: ${(await r.text()).slice(0, 160)}` });
+      // ★5 Gemini 가 바쁘면(503·429·500) 1초·2초 쉬고 다시 묻는다. GEMINI_FALLBACK 을 넣어 두면 마지막엔 그 모델로
+      const models = [env.GEMINI_MODEL, env.GEMINI_MODEL, env.GEMINI_MODEL, env.GEMINI_FALLBACK].filter(Boolean);
+      let r, errText = "";
+      for (let i = 0; i < models.length; i++) {
+        if (i) await new Promise(ok => setTimeout(ok, Math.min(i, 2) * 1000));
+        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${models[i]}:generateContent`,
+          { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body) });
+        if (r.ok) break;
+        errText = await r.text();
+        if (![429, 500, 503].includes(r.status)) break;
+      }
+      // ★4 실패 이유를 앱에 돌려준다 — Google 오류의 «message»만 뽑아 짧게
+      if (!r.ok) { let msg = errText; try { msg = JSON.parse(errText).error.message; } catch {}
+        const hint = r.status === 503 ? "Gemini 가 붐빔 — 잠시 뒤 다시" : r.status === 429 ? "사용 한도 초과" : "";
+        return reply({ labels: [], error: `Gemini ${r.status} ${hint} ${String(msg).slice(0, 120)}`.trim() }); }
       const g = await r.json();
       const text = (g?.candidates?.[0]?.content?.parts || []).filter(x => x.text && !x.thought).map(x => x.text).join("");
       if (!text) return reply({ labels: [], error: "모델 응답이 비었음" });
