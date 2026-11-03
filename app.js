@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.6 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.7 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -245,9 +245,21 @@ function compute(){
     c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')));
     return c;}).sort((a,b)=>b.score-a.score);
   const cap=S.simple?5:S.maxLabels, popOn=S.pop&&S.pop.until>Date.now();
-  const L=[], dots=[];
-  for(const c of C){ const lab={x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp};
-    if(L.length<cap||(popOn&&S.pop.key===c.grp)) L.push(lab); else if(dots.length<12) dots.push(lab); }   // 점도 다음 12개까지만
+  // v3.7 끈끈한 선택 — 한 번 뜬 이름표는 보이는 동안 자리를 지킨다.
+  //  · 잠깐 안 보여도 0.8초는 마지막 자리에 둔다  · 다 찼을 때 교체는 «2초 넘게 떠 있던 것 중 가장 약한 것»보다 2배 강할 때만
+  const now=Date.now(); S.stick=S.stick||new Map();
+  const byKey=new Map(C.map(c=>[c.grp,c])), chosen=[], grace=[];
+  for(const [k,st] of S.stick){ const c=byKey.get(k);
+    if(c){ st.seen=now; st.lab={x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:k}; chosen.push(c); }
+    else if(now-st.seen<800) grace.push(st.lab); else S.stick.delete(k); }
+  chosen.sort((a,b)=>b.score-a.score); chosen.splice(Math.max(0,cap-grace.length));
+  for(const c of C){ if(chosen.includes(c)) continue;
+    if(chosen.length+grace.length<cap||(popOn&&S.pop.key===c.grp)){ chosen.push(c); continue; }
+    let wi=-1,ws=1e9; chosen.forEach((x,i)=>{const st=S.stick.get(x.grp); if(st&&now-st.t0>2000&&x.score<ws){ws=x.score;wi=i;}});
+    if(wi>=0&&c.score>2*ws){ S.stick.delete(chosen[wi].grp); chosen[wi]=c; } }
+  for(const c of chosen) if(!S.stick.has(c.grp)) S.stick.set(c.grp,{t0:now,seen:now,lab:null});
+  const L=chosen.map(c=>({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp})).concat(grace), dots=[];
+  for(const c of C){ if(dots.length>=12) break; if(!chosen.includes(c)) dots.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 점도 다음 12개까지만
   if(S.showPeaks){ const P=[], seen=new Set();
     for(const p of S.peaks){
       const q=project(B,p.az,elev(p.top-S.eye,p.d)); if(!q) continue; const [x,y]=q; if(x<0||x>VIEW.W||y<0||y>VIEW.H) continue;
@@ -270,21 +282,33 @@ function drawDots(g){
 
 /* ---------- 그리기 ---------- */
 function drawLabels(g,L,scale=1){
-  const boxes=[]; g.textBaseline='top';
-  for(const l of L){
+  const boxes=[]; g.textBaseline='top'; S.lift=S.lift||new Map();
+  for(const l of L){ g.globalAlpha=l.a==null?1:l.a;
     const f1=15*scale,f2=11*scale; g.font=`700 ${f1}px -apple-system,"Apple SD Gothic Neo",sans-serif`; const w1=g.measureText(l.name).width; g.font=`${f2}px -apple-system,sans-serif`; const w2=g.measureText(l.sub).width;
     const bw=Math.max(w1,w2)+16*scale, bh=f1+f2+14*scale; let bx,by,ok=false;
-    for(let lift=26*scale;lift<320*scale;lift+=18*scale){bx=l.x-bw/2;by=l.y-lift-bh; if(by<4) break; if(boxes.every(q=>bx+bw<q[0]||bx>q[2]||by+bh<q[1]||by>q[3])){ok=true;break;}}
-    if(!ok) continue; boxes.push([bx,by,bx+bw,by+bh]);
+    const free=()=>boxes.every(q=>bx+bw<q[0]||bx>q[2]||by+bh<q[1]||by>q[3]), prev=S.lift.get(l.key);
+    if(prev!=null){ bx=l.x-bw/2; by=l.y-prev*scale-bh; ok=by>=4&&free(); }   // v3.7 지난번 높이를 먼저 — 이름표가 위아래로 튀지 않게
+    if(!ok) for(let lift=26*scale;lift<480*scale;lift+=18*scale){bx=l.x-bw/2;by=l.y-lift-bh; if(by<4) break; if(free()){ok=true;break;}}
+    if(!ok&&prev!=null){ bx=l.x-bw/2; by=Math.max(4,l.y-prev*scale-bh); ok=true; }   // 자리가 없어도 숨기지 않는다(겹침 허용)
+    if(!ok) continue; boxes.push([bx,by,bx+bw,by+bh]); if(scale===1) S.lift.set(l.key,(l.y-by-bh));
     g.strokeStyle='rgba(255,255,255,.85)'; g.lineWidth=2*scale; g.beginPath(); g.moveTo(l.x,l.y); g.lineTo(l.x,by+bh); g.stroke();
     g.fillStyle=l.peak?'#ffd60a':'#fff'; g.beginPath(); g.arc(l.x,l.y,4*scale,0,7); g.fill();
     g.fillStyle='rgba(0,0,0,.6)'; g.beginPath(); g.roundRect(bx,by,bw,bh,9*scale); g.fill();
     g.fillStyle=l.peak?'#ffd60a':'#fff'; g.font=`700 ${f1}px -apple-system,"Apple SD Gothic Neo",sans-serif`; g.fillText(l.name,bx+8*scale,by+5*scale);
     g.fillStyle='#ddd'; g.font=`${f2}px -apple-system,sans-serif`; g.fillText(l.sub,bx+8*scale,by+9*scale+f1);
   }
+  g.globalAlpha=1;
 }
+// v3.7 화면 이름표 = 목표 위치로 부드럽게 따라가고(30%/프레임), 새로 뜨면 서서히 나타나고, 빠지면 서서히 사라진다
+const DISP=new Map();
 function frame(){
-  const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawDots(g); drawLabels(g,S.labels);
+  const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawDots(g);
+  const live=new Set();
+  for(const l of S.labels){ live.add(l.key); let d=DISP.get(l.key);
+    if(!d){ d={...l,a:0}; DISP.set(l.key,d); }
+    d.x+=(l.x-d.x)*0.3; d.y+=(l.y-d.y)*0.3; d.name=l.name; d.sub=l.sub; d.peak=l.peak; d.a=Math.min(1,d.a+0.12); }
+  for(const [k,d] of DISP) if(!live.has(k)){ d.a-=0.08; if(d.a<=0){ DISP.delete(k); S.lift&&S.lift.delete(k); } }
+  drawLabels(g,[...DISP.values()].sort((a,b)=>b.a-a.a));
   requestAnimationFrame(frame);
 }
 
@@ -300,7 +324,9 @@ function drawStatus(){
 setInterval(()=>{ if(!$('hud').hidden) drawStatus(); },500);
 function onOri(e){
   if(e.alpha==null) return;
-  S.alpha=e.alpha; S.beta=e.beta; S.gamma=e.gamma;
+  // v3.7 센서 평활 — 손떨림이 그대로 이름표 위치·선택으로 번지지 않게(약 0.2초 지수평균)
+  const k=0.25, ang=(o,n)=>o==null?n:((o+k*(((n-o+540)%360)-180))+360)%360, lin=(o,n)=>o==null?n:o+k*(n-o);
+  S.alpha=ang(S.alpha,e.alpha); S.beta=lin(S.beta,e.beta); S.gamma=lin(S.gamma,e.gamma);
   if(typeof e.webkitCompassHeading==='number'){ // iOS: 나침반으로 alpha 기준을 맞춘다(자북→진북)
     // iOS 나침반은 세로 기준 «기기 위쪽» 방향이다 — 가로로 들면 카메라와 90° 어긋나므로 화면 회전각을 더한다(v3.4)
     const want=(e.webkitCompassHeading+scrAngle()+DECL+720)%360, raw=rawHeading();
@@ -377,3 +403,37 @@ document.addEventListener('click',e=>{
   if(best){ S.pop={key:best.key,until:Date.now()+4000}; compute(); }
 });
 $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hidden=true;};
+
+/* ---------- v3.7 «찍고 확인»(B) 자리 — AI 판정은 앱 밖(하박사님 개인 중계 주소)이 한다 ----------
+   설정 ⚙︎ 의 «AI 확인 주소»를 채우면 🔍 버튼이 나타난다. 비워 두면 아무것도 밖으로 나가지 않는다.
+   보내는 것(JSON): {image:'data:image/jpeg;base64,…', w, h, heading, pitch, fov, lat, lon,
+                     candidates:[{key,name,x,y,d,h}]}   ← 지도로 뽑은 «화면 안 후보» 최대 20개, x·y는 사진 픽셀
+   받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
+   자세한 약속·프롬프트 = AI_HANDOFF.md */
+function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('aiUrl').value=localStorage.aiUrl||''; }
+$('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); };
+aiOn();
+async function aiCheck(){
+  const url=localStorage.aiUrl; if(!url) return;
+  const v=$('cam'), W=VIEW.W, H=VIEW.H, k=Math.min(1024/Math.max(W,H),2);
+  const c=document.createElement('canvas'); c.width=Math.round(W*k); c.height=Math.round(H*k); const g=c.getContext('2d');
+  const s=Math.max(c.width/v.videoWidth,c.height/v.videoHeight), dw=v.videoWidth*s, dh=v.videoHeight*s;
+  g.drawImage(v,(c.width-dw)/2,(c.height-dh)/2,dw,dh);
+  const B=camBasis()||{v:[0,1,0]};
+  const cands=[...S.labels.filter(l=>!l.peak),...S.dots].slice(0,20).map(l=>({key:l.key,name:l.name,x:Math.round(l.x*k),y:Math.round(l.y*k),sub:l.sub}));
+  const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
+    pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
+  status('🔍 AI에게 묻는 중…');
+  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(r.status); res=await r.json(); }
+  catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
+  const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
+  const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);
+    return x==null?null:{x:x/k,y:y/k,name:r.name||cd.name,sub:(cd.sub||'')+(r.conf!=null?` · ${Math.round(r.conf*100)}%`:''),key:'ai'+(r.key||r.name),peak:false}; }).filter(Boolean);
+  // 멈춘 사진 위에 이름표 — 톡 하면 닫힘
+  const view=document.createElement('canvas'), dpr=devicePixelRatio||1; view.width=W*dpr; view.height=H*dpr;
+  Object.assign(view.style,{position:'fixed',inset:'0',width:W+'px',height:H+'px',zIndex:50,background:'#000'});
+  const vg=view.getContext('2d'); vg.setTransform(dpr,0,0,dpr,0,0); vg.drawImage(c,0,0,W,H); drawLabels(vg,L);
+  vg.font='600 13px sans-serif'; vg.fillStyle='rgba(255,255,255,.85)'; vg.fillText(`🔍 AI 확인 ${L.length}개 · 톡 하면 닫기`,12,H-16);
+  view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`);
+}
+$('ai').onclick=aiCheck;
