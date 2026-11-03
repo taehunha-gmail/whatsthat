@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.7.2 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.7.3 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -427,6 +427,7 @@ async function aiCheck(){
   status('🔍 AI에게 묻는 중…');
   let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); if(!r.ok) throw new Error(r.status); res=await r.json(); }
   catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
+  if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
   const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);
     return x==null?null:{x:x/k,y:y/k,name:r.name||cd.name,sub:(cd.sub||'')+(r.conf!=null?` · ${Math.round(r.conf*100)}%`:''),key:'ai'+(r.key||r.name),peak:false}; }).filter(Boolean);
