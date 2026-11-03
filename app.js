@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.7 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.7.2 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -241,7 +241,7 @@ function compute(){
   const C=[...cand.values()].map(c=>{
     const center=1+1.5*Math.max(0,1-Math.abs(c.x-cx)/cx);
     c.score=Math.log2(1+c.area)*(1+c.h/40)*(c.d<300?0.3:1)*center*(S.shown.has(c.grp)?1.3:1);   // 1.3 = 깜빡임 방지
-    c.name=c.n>1?c.grp:c.name;
+    c.name=c.grp;   // v3.7.2 동 번호는 빼고 단지 이름만(«101동»은 눈으로 보면 된다)
     c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')));
     return c;}).sort((a,b)=>b.score-a.score);
   const cap=S.simple?5:S.maxLabels, popOn=S.pop&&S.pop.until>Date.now();
