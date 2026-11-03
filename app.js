@@ -410,7 +410,8 @@ $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hi
                      candidates:[{key,name,x,y,d,h}]}   ← 지도로 뽑은 «화면 안 후보» 최대 20개, x·y는 사진 픽셀
    받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
    자세한 약속·프롬프트 = AI_HANDOFF.md */
-function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('aiUrl').value=localStorage.aiUrl||''; }
+function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
+$('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); };
 $('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); };
 aiOn();
 async function aiCheck(){
@@ -424,7 +425,7 @@ async function aiCheck(){
   const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
     pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
   status('🔍 AI에게 묻는 중…');
-  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if(!r.ok) throw new Error(r.status); res=await r.json(); }
+  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); if(!r.ok) throw new Error(r.status); res=await r.json(); }
   catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
   const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);

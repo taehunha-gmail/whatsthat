@@ -9,9 +9,14 @@ Gemini 비전 모델로 «사진에 실제로 보이는 후보만» 골라 위�
 [조건]
 - Gemini API 키는 코드에 쓰지 말고 Worker 환경변수(비밀) GEMINI_API_KEY 로 읽는다. 등록 방법도 알려 줘.
 - CORS: Access-Control-Allow-Origin: https://taehunha-gmail.github.io
-  OPTIONS 요청에는 Access-Control-Allow-Methods: POST, OPTIONS / Allow-Headers: Content-Type 로 답한다.
+  OPTIONS 요청에는 Access-Control-Allow-Methods: POST, OPTIONS / Allow-Headers: Content-Type, X-App-Token 로 답한다.
 - POST 외에는 405. 요청 본문이 3 MB 넘으면 413.
 - 모델 응답이 JSON이 아니면 {"labels":[]} 를 돌려준다(앱이 죽지 않게).
+- 문지기: 요청 헤더 X-App-Token 이 Worker 비밀값 APP_TOKEN 과 다르면 401. (앱 주소는 공개라, 이게 없으면 남이 내 키로 부를 수 있음)
+- 모델 호출: 응답 형식을 JSON 으로 강제(response_mime_type: application/json), temperature 0.
+  모델은 속도 우선이면 Flash 계열, 정확도 우선이면 Pro 계열 — 이름은 환경변수 GEMINI_MODEL 로 바꿀 수 있게.
+- 위치는 모델에게 «0~1000 정규화 좌표(box_2d: [ymin, xmin, ymax, xmax])»로 받고, Worker 가 사진 크기(w·h)로 픽셀 x·y(상자 가운데 위쪽)로 바꿔 돌려준다.
+  후보 목록도 모델에게 줄 때 x·y 를 0~1000 정규화 값으로 바꿔 준다.
 
 [받는 것 — POST JSON]
 { "image":"data:image/jpeg;base64,...", "w":768, "h":1024,
@@ -26,7 +31,8 @@ Gemini 비전 모델로 «사진에 실제로 보이는 후보만» 골라 위�
 사진은 서울에서 폰 카메라로 찍은 풍경이다. 아래 후보는 GPS·나침반·지도로 계산한 «화면 안에 있을 수 있는 건물» 목록이고,
 x·y는 계산상 사진 속 위치다(오차 있음). 사진에 실제로 보이는 후보만 골라라. 가려졌거나 안 보이면 빼라.
 보이는 것은 사진 속 실제 위치(건물 꼭대기 근처 x·y 픽셀)를 고쳐 적어라. 후보에 없는 건물은 지어내지 마라.
-확신도 conf(0~1)를 붙여라. 출력은 JSON 하나만: {"labels":[{"key":…,"name":…,"x":…,"y":…,"conf":…}]}
+확신도 conf(0~1)를 붙여라. 같은 단지의 비슷한 동처럼 구별이 안 되면 단지 이름 하나만 남겨라.
+출력은 JSON 하나만: {"labels":[{"key":…,"name":…,"box_2d":[ymin,xmin,ymax,xmax],"conf":…}]}  (좌표는 0~1000)
 
 [마지막]
 배포가 끝나면 나오는 주소(https://….workers.dev)를 앱 ⚙︎ 설정의 «AI 확인 주소»에 붙여 넣을 거야.

@@ -38,8 +38,9 @@
 - `labels` 에는 **사진에 실제로 보이는 것만** 넣습니다. 가려졌거나 화면 밖이면 뺍니다.
 - `x`·`y`(사진 픽셀, 건물 꼭대기 근처)는 없어도 됩니다 — 없으면 앱이 후보 위치를 씁니다.
 - `key` 나 `name` 중 하나는 후보 목록과 **똑같이** 돌려줘야 앱이 짝을 찾습니다.
+- 앱은 요청 헤더 **`X-App-Token`** 에 ⚙︎ «AI 암호» 값을 실어 보냅니다. Worker 비밀값 `APP_TOKEN` 과 다르면 거절하세요(앱 주소가 공개라 남이 내 키로 부르는 것을 막음).
 - 브라우저에서 부르므로 **CORS** 를 열어야 합니다: `Access-Control-Allow-Origin: https://taehunha-gmail.github.io`
-  (그리고 `OPTIONS` 요청에 `Access-Control-Allow-Headers: Content-Type` 응답).
+  (그리고 `OPTIONS` 요청에 `Access-Control-Allow-Headers: Content-Type, X-App-Token` 응답).
 
 ## 3. 만드는 순서 (개인 PC)
 
