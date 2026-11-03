@@ -42,7 +42,7 @@ ${JSON.stringify(cands)}`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${env.GEMINI_MODEL}:generateContent`;
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
-                   generationConfig: { temperature: 0, response_mime_type: "application/json" } };
+                   generationConfig: { response_mime_type: "application/json" } };
     try {
       // ★3 키는 주소(?key=) 대신 헤더로 — 주소는 로그에 남기 쉬움
       const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body) });
