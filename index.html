@@ -22,7 +22,7 @@
   <p>카메라를 들면 보이는 건물·산에 이름표가 붙습니다.</p>
   <label class="floor">지금 몇 층? <input id="floor" type="number" min="1" max="120" value="1"> 층</label>
   <button id="go">시작</button>
-  <p class="small">카메라 · 위치 · 동작 센서 권한을 묻습니다.<br>사진은 폰 밖으로 나가지 않습니다.</p>
+  <p class="small">카메라 · 위치 · 동작 센서 권한을 묻습니다.<br><span id="privacy">사진은 폰 밖으로 나가지 않습니다.</span></p>
 </div>
 
 <div id="hud" hidden>
@@ -57,6 +57,6 @@
 
 <div id="err" hidden></div>
 <button id="sensor" hidden>🧭 방향 센서 켜기</button>
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>

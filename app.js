@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.7.3 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.7.4 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -410,7 +410,8 @@ $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hi
                      candidates:[{key,name,x,y,d,h}]}   ← 지도로 뽑은 «화면 안 후보» 최대 20개, x·y는 사진 픽셀
    받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
    자세한 약속·프롬프트 = AI_HANDOFF.md */
-function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
+function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('privacy').textContent=localStorage.aiUrl?'🔍를 누를 때만 사진을 AI로 보냅니다.':'사진은 폰 밖으로 나가지 않습니다.';   // v3.7.4
+  $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
 $('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); };
 $('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); };
 aiOn();
@@ -425,7 +426,7 @@ async function aiCheck(){
   const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
     pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
   status('🔍 AI에게 묻는 중…');
-  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); if(!r.ok) throw new Error(r.status); res=await r.json(); }
+  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({})); if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 401·413 도 이유를 보이게
   catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
   if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
   const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
