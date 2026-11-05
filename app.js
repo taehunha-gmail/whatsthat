@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.7.4 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.7.5 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -302,6 +302,10 @@ function drawLabels(g,L,scale=1){
 // v3.7 화면 이름표 = 목표 위치로 부드럽게 따라가고(30%/프레임), 새로 뜨면 서서히 나타나고, 빠지면 서서히 사라진다
 const DISP=new Map();
 function frame(){
+  try{ frame1(); }catch(e){ if(!S.frameErr){ S.frameErr=1; status('그리기 오류 — '+String(e.message||e).slice(0,60)); } }   // v3.7.5 한 번 틀려도 그리기를 멈추지 않는다
+  requestAnimationFrame(frame);
+}
+function frame1(){
   const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawDots(g);
   const live=new Set();
   for(const l of S.labels){ live.add(l.key); let d=DISP.get(l.key);
@@ -309,7 +313,6 @@ function frame(){
     d.x+=(l.x-d.x)*0.3; d.y+=(l.y-d.y)*0.3; d.name=l.name; d.sub=l.sub; d.peak=l.peak; d.a=Math.min(1,d.a+0.12); }
   for(const [k,d] of DISP) if(!live.has(k)){ d.a-=0.08; if(d.a<=0){ DISP.delete(k); S.lift&&S.lift.delete(k); } }
   drawLabels(g,[...DISP.values()].sort((a,b)=>b.a-a.a));
-  requestAnimationFrame(frame);
 }
 
 /* ---------- 센서 ---------- */
@@ -425,9 +428,13 @@ async function aiCheck(){
   const cands=[...S.labels.filter(l=>!l.peak),...S.dots].slice(0,20).map(l=>({key:l.key,name:l.name,x:Math.round(l.x*k),y:Math.round(l.y*k),sub:l.sub}));
   const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
     pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
+  if(S.aiBusy) return; S.aiBusy=true; const t0=Date.now(), ac=new AbortController();
+  const tick=setInterval(()=>status(`🔍 AI에게 묻는 중… ${Math.round((Date.now()-t0)/1000)}초`),1000), kill=setTimeout(()=>ac.abort(),45000);   // v3.7.5 45초 넘으면 포기
   status('🔍 AI에게 묻는 중…');
-  let res; try{ const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({})); if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 401·413 도 이유를 보이게
-  catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
+  let res; try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({})); if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 401·413 도 이유를 보이게
+  catch(e){ status('🔍 AI 확인 실패 — '+(e.name==='AbortError'?'45초 안에 답이 없음':e.message)); return; }
+  finally{ clearInterval(tick); clearTimeout(kill); S.aiBusy=false; }
+  status(`🔍 답 받음 ${Math.round((Date.now()-t0)/1000)}초`);
   if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
   const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);

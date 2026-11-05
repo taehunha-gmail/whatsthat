@@ -2,7 +2,8 @@
 [hidden]{display:none!important}
 html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,"Apple SD Gothic Neo","Pretendard",sans-serif;overflow:hidden}
 #cam,#overlay{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover}
-#overlay{pointer-events:none}
+#overlay{pointer-events:none;z-index:1;transform:translateZ(0)}   /* v3.7.5 아이폰: 비디오 층 위로 확실히 */
+#hud,#start,#calibPanel,#setPanel,#cross{z-index:2}
 #start{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;
  background:linear-gradient(#28286e,#c85a8c 60%,#ffaa5a)}
 #start .logo{width:120px;height:120px;border-radius:28px;box-shadow:0 8px 30px rgba(0,0,0,.35)}

@@ -41,7 +41,7 @@ export default {
 ${JSON.stringify(cands)}`;
 
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
-                   generationConfig: { response_mime_type: "application/json" } };
+                   generationConfig: { response_mime_type: "application/json", thinkingConfig: { thinkingLevel: "low" } } };   // ★6 생각은 짧게 — 오래 생각하면 수십 초
     try {
       // ★3 키는 주소(?key=) 대신 헤더로 — 주소는 로그에 남기 쉬움
       // ★5 Gemini 가 바쁘면(503·429·500) 1초·2초 쉬고 다시 묻는다. GEMINI_FALLBACK 을 넣어 두면 마지막엔 그 모델로
