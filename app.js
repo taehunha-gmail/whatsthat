@@ -1,6 +1,6 @@
 'use strict';
-/* 저게뭐야? v3.7.5 — 실시간 카메라에 보이는 건물·산 이름표
-   데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
+/* 저게뭐야? v3.8 — 실시간 카메라에 보이는 건물·산 이름표
+   데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -118,7 +118,8 @@ async function tileEls(lat,lon){
     for(const [n,lv,h,apt,f] of c.b){const g=geo(f), d=bd(lat,lon,g[0].lat,g[0].lon)[1]; if(d>600&&!(n&&d<1500)) continue; els.push({type:'way',id:kid(g),tags:tg(n,lv,h,apt),geometry:g});}
     for(const [n,f] of c.r){const g=geo(f); els.push({type:'way',id:'r'+kid(g),tags:{landuse:'residential',name:n},geometry:g});}
   }
-  for(const [n,lv,h,apt,p] of tall){ if(bd(lat,lon,p[0][0],p[0][1])[1]>9000) continue; const g=p.map(([la,lo])=>({lat:la,lon:lo})); els.push({type:'way',id:kid(g),tags:tg(n,lv,h,apt),geometry:g});}
+  for(const [n,lv,h,apt,p] of tall){ const dd=bd(lat,lon,p[0][0],p[0][1])[1]; if(dd>9000||dd<600||(n&&dd<1500)) continue;   // v3.8 가까운 건 t/ 타일에 이미 있다(겹침 방지)
+  const g=p.map(([la,lo])=>({lat:la,lon:lo})); els.push({type:'way',id:kid(g),tags:tg(n,lv,h,apt),geometry:g});}
   for(const [n,la,lo,e] of pk){ if(bd(lat,lon,la,lo)[1]<20000) els.push({type:'node',id:n+la,lat:la,lon:lo,tags:{natural:'peak',name:n,ele:String(e)}}); }
   S.fromTile=true; return els;
 }
