@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.8 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.8.1 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -307,6 +307,7 @@ function frame(){
   requestAnimationFrame(frame);
 }
 function frame1(){
+  { const v=$('cam'); if(v.videoWidth&&(v.videoWidth!==VIEW.vw||v.videoHeight!==VIEW.vh||innerWidth!==VIEW.W||innerHeight!==VIEW.H)) updateView(); }   // v3.8.1 가로·세로 영상 크기가 어긋난 채 남지 않게 매 프레임 확인
   const g=$('overlay').getContext('2d'); g.clearRect(0,0,VIEW.W,VIEW.H); drawDots(g);
   const live=new Set();
   for(const l of S.labels){ live.add(l.key); let d=DISP.get(l.key);
@@ -354,7 +355,7 @@ async function start(){
   setTimeout(()=>{ if(S.beta==null) $('sensor').hidden=false; },1500);
   $('start').hidden=true; $('hud').hidden=false;
   addEventListener('deviceorientationabsolute',onOri,true); addEventListener('deviceorientation',onOri,true);
-  $('cam').addEventListener('loadedmetadata',updateView); addEventListener('resize',updateView); updateView();
+  $('cam').addEventListener('loadedmetadata',updateView); $('cam').addEventListener('resize',updateView); addEventListener('resize',updateView); updateView();   // v3.8.1 영상 크기가 바뀔 때도(폰을 돌린 뒤 늦게 바뀜)
   navigator.geolocation.watchPosition(p=>{
     S.lat=p.coords.latitude; S.lon=p.coords.longitude; S.acc=p.coords.accuracy;
     if(!S.loadedAt||bd(S.loadedAt[0],S.loadedAt[1],S.lat,S.lon)[1]>400) loadArea();
