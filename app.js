@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.8.2 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.9 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -441,11 +441,24 @@ async function aiCheck(){
   const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);
     return x==null?null:{x:x/k,y:y/k,name:r.name||cd.name,sub:(cd.sub||'')+(r.conf!=null?` · ${Math.round(r.conf*100)}%`:''),key:'ai'+(r.key||r.name),peak:false}; }).filter(Boolean);
+  // v3.9 자동 보정 — AI가 찍은 실제 위치와 지도로 계산한 위치의 각도 차이(중앙값)만큼 나침반을 돌린다
+  const fix=aiFix(res.labels||[],byKey,byName,k); if(fix) status(fix);
   // 멈춘 사진 위에 이름표 — 톡 하면 닫힘
   const view=document.createElement('canvas'), dpr=devicePixelRatio||1; view.width=W*dpr; view.height=H*dpr;
   Object.assign(view.style,{position:'fixed',inset:'0',width:W+'px',height:H+'px',zIndex:50,background:'#000'});
   const vg=view.getContext('2d'); vg.setTransform(dpr,0,0,dpr,0,0); vg.drawImage(c,0,0,W,H); drawLabels(vg,L);
   vg.font='600 13px sans-serif'; vg.fillStyle='rgba(255,255,255,.85)'; vg.fillText(`🔍 AI 확인 ${L.length}개 · 톡 하면 닫기`,12,H-16);
-  view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`+(res.how?` · ${res.how}`:''));
+  view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`+(fix?` · ${fix}`:'')+(res.how?` · ${res.how.replace(/gemini-/g,'')}`:''));
 }
 $('ai').onclick=aiCheck;
+function aiFix(labels,byKey,byName,k){
+  const cx=VIEW.W/2, ang=x=>Math.atan((x-cx)/VIEW.f)/D2R, D=[];
+  for(const r of labels){ const cd=byKey.get(r.key)||byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<0.6) continue;
+    const d=ang(r.x/k)-ang(cd.x/k); if(Math.abs(d)<25) D.push(d); }
+  if(!D.length) return null;
+  D.sort((a,b)=>a-b); const m=D[D.length>>1], spread=D[D.length-1]-D[0];
+  if(D.length>=2&&spread>6) return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${spread.toFixed(0)}°)`;
+  if(Math.abs(m)<0.7) return `🧭 방향 정확(${m>=0?'+':''}${m.toFixed(1)}°)`;
+  S.userOff=((S.userOff-m+540)%360)-180; localStorage.hdgOff=S.userOff; $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
+  return `🧭 자동 보정 ${-m>=0?'+':''}${(-m).toFixed(1)}° (건물 ${D.length}개 기준)`;
+}
