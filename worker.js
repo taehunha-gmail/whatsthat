@@ -1,4 +1,4 @@
-// 저게뭐야 «찍고 확인» 중계 Worker — 주석 ★ = 손본 곳
+// 저게뭐야 «찍고 확인» 중계 Worker — Cloudflare 편집기에 통째로 붙여 넣는다. 설명은 AI_HANDOFF.md 4절
 const ALLOWED_ORIGIN = "https://taehunha-gmail.github.io";
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB
 

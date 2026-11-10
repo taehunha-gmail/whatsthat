@@ -1,5 +1,5 @@
-# whatsthat
-저게뭐야? - 보이는 건물에 이름표
+# 저게뭐야?
+폰 카메라에 보이는 건물·산에 이름표를 붙여 주는 웹앱 — https://taehunha-gmail.github.io/whatsthat/
 
-## 데이터
-- `data/` — 수도권 건물·단지·봉우리 정적 타일. © OpenStreetMap contributors (ODbL), Geofabrik south-korea-261101 에서 `tool/tiles.py` 로 생성.
+- 구조·동작·이어 만들기: [AI_HANDOFF.md](AI_HANDOFF.md)
+- 데이터: © OpenStreetMap contributors (ODbL) · 국토교통부 GIS건물통합정보(공공누리) · AWS terrain tiles · 카카오 지도 SDK
