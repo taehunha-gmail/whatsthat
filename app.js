@@ -1,5 +1,5 @@
 'use strict';
-/* 저게뭐야? v3.8.1 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.8.2 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
@@ -431,10 +431,10 @@ async function aiCheck(){
   const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
     pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
   if(S.aiBusy) return; S.aiBusy=true; const t0=Date.now(), ac=new AbortController();
-  const tick=setInterval(()=>status(`🔍 AI에게 묻는 중… ${Math.round((Date.now()-t0)/1000)}초`),1000), kill=setTimeout(()=>ac.abort(),45000);   // v3.7.5 45초 넘으면 포기
+  const tick=setInterval(()=>status(`🔍 AI에게 묻는 중… ${Math.round((Date.now()-t0)/1000)}초`),1000), kill=setTimeout(()=>ac.abort(),50000);   // 50초 넘으면 포기(Worker 는 15+25초 안에 끝냄)
   status('🔍 AI에게 묻는 중…');
   let res; try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({})); if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 401·413 도 이유를 보이게
-  catch(e){ status('🔍 AI 확인 실패 — '+(e.name==='AbortError'?'45초 안에 답이 없음':e.message)); return; }
+  catch(e){ status('🔍 AI 확인 실패 — '+(e.name==='AbortError'?'50초 안에 답이 없음':e.message)); return; }
   finally{ clearInterval(tick); clearTimeout(kill); S.aiBusy=false; }
   status(`🔍 답 받음 ${Math.round((Date.now()-t0)/1000)}초`);
   if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
@@ -446,6 +446,6 @@ async function aiCheck(){
   Object.assign(view.style,{position:'fixed',inset:'0',width:W+'px',height:H+'px',zIndex:50,background:'#000'});
   const vg=view.getContext('2d'); vg.setTransform(dpr,0,0,dpr,0,0); vg.drawImage(c,0,0,W,H); drawLabels(vg,L);
   vg.font='600 13px sans-serif'; vg.fillStyle='rgba(255,255,255,.85)'; vg.fillText(`🔍 AI 확인 ${L.length}개 · 톡 하면 닫기`,12,H-16);
-  view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`);
+  view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`+(res.how?` · ${res.how}`:''));
 }
 $('ai').onclick=aiCheck;

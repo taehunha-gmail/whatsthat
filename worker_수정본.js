@@ -25,6 +25,20 @@ export default {
     if (raw.byteLength > MAX_BODY_BYTES) return reply({ error: "Payload Too Large" }, 413);
     let p; try { p = JSON.parse(new TextDecoder().decode(raw)); } catch { return reply({ error: "Invalid JSON" }, 400); }
 
+    // ★7 점검: {"diag":true} 를 보내면 사진 없이 두 모델에 짧게 물어 상태·걸린 시간만 알려 준다
+    const callG = async (model, body, ms) => { const t0 = Date.now();
+      try { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
+        if (r.ok) return { ok: true, model, ms: Date.now() - t0, g: await r.json() };
+        const t = await r.text(); let msg = t; try { msg = JSON.parse(t).error.message; } catch {}
+        return { ok: false, model, ms: Date.now() - t0, status: r.status, msg: String(msg).slice(0, 120) };
+      } catch (e) { return { ok: false, model, ms: Date.now() - t0, status: "timeout", msg: String(e).slice(0, 80) }; } };
+    if (p.diag) {
+      const q = { contents: [{ role: "user", parts: [{ text: "ok 라고만 답해" }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" } } };
+      const res = await Promise.all([env.GEMINI_MODEL, env.GEMINI_FALLBACK].filter(Boolean).map(m => callG(m, q, 25000)));
+      return reply({ diag: res.map(({ g, ...x }) => x) });
+    }
+
     const { image, w = 1, h = 1, candidates = [] } = p;
     if (!image) return reply({ labels: [] });
     let data = image, mime = "image/jpeg";
@@ -43,23 +57,15 @@ ${JSON.stringify(cands)}`;
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
                    generationConfig: { response_mime_type: "application/json", thinkingConfig: { thinkingLevel: "low" } } };   // ★6 생각은 짧게 — 오래 생각하면 수십 초
     try {
-      // ★3 키는 주소(?key=) 대신 헤더로 — 주소는 로그에 남기 쉬움
-      // ★5 Gemini 가 바쁘면(503·429·500) 1초·2초 쉬고 다시 묻는다. GEMINI_FALLBACK 을 넣어 두면 마지막엔 그 모델로
-      const models = [env.GEMINI_MODEL, env.GEMINI_MODEL, env.GEMINI_MODEL, env.GEMINI_FALLBACK].filter(Boolean);
-      let r, errText = "";
-      for (let i = 0; i < models.length; i++) {
-        if (i) await new Promise(ok => setTimeout(ok, Math.min(i, 2) * 1000));
-        r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${models[i]}:generateContent`,
-          { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body) });
-        if (r.ok) break;
-        errText = await r.text();
-        if (![429, 500, 503].includes(r.status)) break;
-      }
-      // ★4 실패 이유를 앱에 돌려준다 — Google 오류의 «message»만 뽑아 짧게
-      if (!r.ok) { let msg = errText; try { msg = JSON.parse(errText).error.message; } catch {}
-        const hint = r.status === 503 ? "Gemini 가 붐빔 — 잠시 뒤 다시" : r.status === 429 ? "사용 한도 초과" : "";
-        return reply({ labels: [], error: `Gemini ${r.status} ${hint} ${String(msg).slice(0, 120)}`.trim() }); }
-      const g = await r.json();
+      // ★3 키는 헤더로. ★5 붐비면(503·429·500) 또는 늦으면 → 예비 모델(GEMINI_FALLBACK)로 바로 넘어간다(기다리며 같은 모델 재시도 안 함)
+      const t0 = Date.now(), tries = [];
+      let R = await callG(env.GEMINI_MODEL, body, 15000); tries.push(R);
+      if (!R.ok && env.GEMINI_FALLBACK && [429, 500, 503, "timeout"].includes(R.status)) { R = await callG(env.GEMINI_FALLBACK, body, 25000); tries.push(R); }
+      const how = tries.map(x => `${x.model} ${x.ok ? "OK" : x.status} ${(x.ms / 1000).toFixed(1)}초`).join(" → ");
+      // ★4 실패 이유를 앱에 돌려준다
+      if (!R.ok) { const hint = R.status === 503 ? "Gemini 가 붐빔" : R.status === 429 ? "사용 한도 초과" : R.status === "timeout" ? "너무 늦음" : "";
+        return reply({ labels: [], how, error: `${hint} [${how}] ${R.msg || ""}`.trim().slice(0, 200) }); }
+      const g = R.g;
       const text = (g?.candidates?.[0]?.content?.parts || []).filter(x => x.text && !x.thought).map(x => x.text).join("");
       if (!text) return reply({ labels: [], error: "모델 응답이 비었음" });
       let parsed; try { parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, "")); } catch { return reply({ labels: [], error: "모델 응답이 JSON 아님" }); }
@@ -68,7 +74,7 @@ ${JSON.stringify(cands)}`;
         if (Array.isArray(it.box_2d) && it.box_2d.length === 4) { const [ymin, xmin, , xmax] = it.box_2d;
           o.x = Math.round((xmin + xmax) / 2 / 1000 * w); o.y = Math.round(ymin / 1000 * h); }
         return o; });
-      return reply({ labels });
+      return reply({ labels, how, ms: Date.now() - t0 });
     } catch (e) { return reply({ labels: [], error: "중계 오류: " + String(e).slice(0, 120) }); }
   },
 };
