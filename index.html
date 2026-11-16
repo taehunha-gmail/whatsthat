@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <video id="cam" playsinline muted autoplay></video>
@@ -38,10 +38,11 @@
 </div>
 
 <div id="calibPanel" hidden>
-  <p><b>방향 맞추기</b> — 아는 건물(예: 롯데타워)을 화면 가운데 <b>+</b>에 두고 그 이름을 누르세요. 또는 막대로 돌리세요.</p>
+  <p><b>방향 맞추기</b> — 평소에는 이 창 없이 <b>화면을 좌우로 끌어</b> 이름표를 건물 위에 놓으면 됩니다. 여기서는 아는 건물(예: 롯데타워)을 가운데 <b>+</b>에 두고 그 이름을 누르거나, 막대로 돌립니다.</p>
   <div id="calibList"></div>
   <label>방향 <input id="hdg" type="range" min="-60" max="60" step="0.5" value="0"> <span id="hdgV">0°</span></label>
   <label>화각 <input id="fov" type="range" min="50" max="85" step="0.5" value="67"> <span id="fovV">67°</span></label>
+  <button id="calibReset" style="background:#555">보정 지우기(나침반 그대로)</button>
   <button id="calibDone">완료</button>
 </div>
 <div id="cross" hidden>+</div>
@@ -51,13 +52,13 @@
   <label><input id="showPeaks" type="checkbox" checked> 산 이름</label>
   <label>이름표 개수 <input id="maxLabels" type="range" min="5" max="30" value="14"> <span id="maxV">14</span></label>
   <label>AI 확인 주소 <input id="aiUrl" type="url" placeholder="비워 두면 꺼짐" style="width:12em"></label>
-  <label>AI 암호 <input id="aiToken" type="password" placeholder="Worker APP_TOKEN" style="width:9em"></label>
+  <label>AI 암호 <input id="aiToken" type="text" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Worker APP_TOKEN" style="width:9em"> <span id="aiOk"></span></label>
   <button id="reload">주변 건물 다시 불러오기</button>
   <button id="setDone">닫기</button>
 </div>
 
 <div id="err" hidden></div>
 <button id="sensor" hidden>🧭 방향 센서 켜기</button>
-<script src="app.js?v=20"></script>
+<script src="app.js?v=21"></script>
 </body>
 </html>

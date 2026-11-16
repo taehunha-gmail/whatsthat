@@ -1,35 +1,40 @@
 'use strict';
-/* 저게뭐야? v3.9 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.10 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
+const VER='3.10';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
 const S={lat:null,lon:null,acc:null,ground:0,eye:0,floor:1,blds:[],peaks:[],areas:[],
-  alpha:null,beta:null,gamma:null,iosHdg:null,alphaOff:null,userOff:+(localStorage.hdgOff||0),
+  M:null,alphaOff:null,cmpOff:null,cmpAcc:null,hold:false,userOff:+(localStorage.hdgOff||0),
   fov:+(localStorage.fov2||67),maxLabels:+(localStorage.maxLabels||14),showPeaks:true,loading:false,loadedAt:null,labels:[],dots:[],shown:new Set(),pop:null,simple:localStorage.simple!=='0',names:new Map()};
 
 /* ---------- 기하 ---------- */
 const R=6371000, D2R=Math.PI/180;
 function bd(lat0,lon0,lat,lon){const y=(lat-lat0)*111320,x=(lon-lon0)*111320*Math.cos(lat0*D2R);return [((Math.atan2(x,y)/D2R)+360)%360,Math.hypot(x,y)];}
 function elev(dh,d){return Math.atan2(dh-d*d*(1-0.13)/(2*R),d)/D2R;}
-function camBasis(){ // deviceorientation → 카메라 앞·오른쪽·위 벡터(세계: x동 y북 z위)
-  if(S.beta==null){ if(!S.manual) return null; const h=((S.userOff%360)+360)%360*D2R; // 센서 없음: 수평으로 든 폰, 방향 = 보정값
+const wrap=x=>((x%360)+540)%360-180;   // 각도 차이를 −180~180°로
+function eulerM(al,be,ga){ // deviceorientation(α·β·γ) → 기기 오른쪽·위·카메라 앞 벡터 9칸(세계: x동 y북 z위, 방위 기준은 아직 임의)
+  const A=al*D2R,B=be*D2R,G=ga*D2R,cA=Math.cos(A),sA=Math.sin(A),cB=Math.cos(B),sB=Math.sin(B),cG=Math.cos(G),sG=Math.sin(G);
+  return [cA*cG-sA*sB*sG, sA*cG+cA*sB*sG, -cB*sG,  -sA*cB, cA*cB, sB,  -(cA*sG+sA*sB*cG), -(sA*sG-cA*sB*cG), -cB*cG];
+}
+function ortho(M){ // 평활로 살짝 틀어진 세 축을 다시 직각·길이 1로
+  const n=i=>{const l=Math.hypot(M[i],M[i+1],M[i+2])||1; M[i]/=l; M[i+1]/=l; M[i+2]/=l;};
+  n(6); const d=M[0]*M[6]+M[1]*M[7]+M[2]*M[8]; M[0]-=d*M[6]; M[1]-=d*M[7]; M[2]-=d*M[8]; n(0);
+  M[3]=M[1]*M[8]-M[2]*M[7]; M[4]=M[2]*M[6]-M[0]*M[8]; M[5]=M[0]*M[7]-M[1]*M[6];   // 위 = 오른쪽 × 앞
+}
+function camBasis(){ // 기기 자세(S.M) → 카메라 앞·화면 오른쪽·화면 위 벡터(세계: x동 y북 z위)
+  if(!S.M){ if(!S.manual) return null; const h=((S.userOff%360)+360)%360*D2R; // 센서 없음: 수평으로 든 폰, 방향 = 보정값
     return {v:[Math.sin(h),Math.cos(h),0], r:[Math.cos(h),-Math.sin(h),0], u:[0,0,1]}; }
-  let a=S.alpha; if(S.alphaOff!=null) a=a+S.alphaOff; a=a-S.userOff; // 시계 방향 보정 = alpha 감소
-  const A=a*D2R,B=S.beta*D2R,G=S.gamma*D2R,cA=Math.cos(A),sA=Math.sin(A),cB=Math.cos(B),sB=Math.sin(B),cG=Math.cos(G),sG=Math.sin(G);
-  const r=[cA*cG-sA*sB*sG, sA*cG+cA*sB*sG, -cB*sG];
-  const u=[-sA*cB, cA*cB, sB];
-  const v=[-(cA*sG+sA*sB*cG), -(sA*sG-cA*sB*cG), -cB*cG];
+  const t=((S.alphaOff||0)-S.userOff)*D2R, c0=Math.cos(t), s0=Math.sin(t), M=S.M;   // 방위 맞춤: 수직축으로 돌린다(시계 방향 보정 = 반시계 회전 감소)
+  const z=i=>[M[i]*c0-M[i+1]*s0, M[i]*s0+M[i+1]*c0, M[i+2]], r=z(0), u=z(3), v=z(6);
   const th=scrAngle()*D2R; if(!th) return {r,u,v};   // 가로로 들면 화면 오른쪽·위가 기기 축과 90° 돈다
   const c=Math.cos(th),s=Math.sin(th);
   return {r:r.map((x,i)=>x*c-u[i]*s), u:r.map((x,i)=>x*s+u[i]*c), v};
 }
 function scrAngle(){const a=(screen.orientation&&typeof screen.orientation.angle==='number')?screen.orientation.angle:(+window.orientation||0);return ((a%360)+360)%360;}
 function headingOf(v){return ((Math.atan2(v[0],v[1])/D2R)+360)%360;}
-function rawHeading(){ // alphaOff 없이
-  const A=S.alpha*D2R,B=S.beta*D2R,G=S.gamma*D2R,cA=Math.cos(A),sA=Math.sin(A),cB=Math.cos(B),sB=Math.sin(B),cG=Math.cos(G),sG=Math.sin(G);
-  return headingOf([-(cA*sG+sA*sB*cG), -(sA*sG-cA*sB*cG)]);
-}
+function rawHeading(){ return headingOf([S.M[6],S.M[7]]); }   // 방위 맞춤(alphaOff) 전의 카메라 방향
 let VIEW={W:0,H:0,f:0};
 function updateView(){
   const W=innerWidth,H=innerHeight,vid=$('cam');
@@ -194,8 +199,9 @@ function pumpK(){
     S.names.set(b.id,n); kBusy=false; setTimeout(pumpK,120);
   });
 }
+const NAMEFIX={'더서울라이티움':'갤러리아 포레'};   // 지도(OSM) 이름이 틀린 곳 — 라이티움은 갤러리아 포레 지하 전시장인데 45층 건물 이름으로 올라 있다
 function labelOf(b){
-  const n=(b.t.name||'').trim();
+  let n=(b.t.name||'').trim(); n=NAMEFIX[n]||n;
   if(n&&!BAD.test(n)) return n;
   let k=kakaoName(b);
   if(k){ if(/\d+동$/.test(k)&&n&&/^\d+동?$/.test(n)) k=k.replace(/\s*\d+동$/,''); const dong=n&&/^\d+동?$/.test(n)?(n.endsWith('동')?n:n+'동'):''; return (k+(dong&&!k.includes(dong)?' '+dong:'')).trim(); }
@@ -226,13 +232,14 @@ function compute(){
   for(let y=0;y<h;y+=1)for(let x=0;x<w;x+=1){const i=(y*w+x)*4; if(data[i+3]<250) continue; const k=data[i]|(data[i+1]<<8)|(data[i+2]<<16); const b=shapes.get(k); if(!b) continue;
     if(x<b.bb[0]||x>b.bb[1]||y<b.bb[2]||y>b.bb[3]) continue;   // v3.6 경계 섞임 색 = 엉뚱한 건물 번호 → 제 윤곽 밖이면 버린다
     cnt.set(k,(cnt.get(k)||0)+1); (sx.get(k)||sx.set(k,[]).get(k)).push(x); if(!top.has(k)||y<top.get(k)) top.set(k,y);}
-  const vis=[...cnt.entries()].filter(([k,n])=>n>=6).sort((a,b)=>b[1]-a[1]);
+  const vis=[...cnt.entries()].filter(([k,n])=>n>=3).sort((a,b)=>b[1]-a[1]);   // 새로 뜨려면 6칸, 떠 있던 것은 3칸까지 봐준다(아래) — 멀고 가는 탑(롯데타워)이 손떨림에 깜빡이지 않게(v3.10)
   // v3.5 간단 모드 — 같은 단지는 한 이름표, 기본 5개(고층·가운데 우선)·나머지는 점(톡 누르면 이름)
   const cand=new Map();
   for(const [k,n] of vis){
     const b=shapes.get(k); if(b.d<40) continue;
     const name=labelOf(b); if(!name) continue;
     const grp=name.replace(/\s*(\d+|[A-Z])동?$/,'')||name;   // «서울숲한신더휴 101동»·«아크로서울포레스트 B» → 단지 이름
+    if(n<6&&!S.shown.has(grp)) continue;
     const c=cand.get(grp); if(c){ c.n++; c.area=Math.max(c.area,n); c.h=Math.max(c.h,b.h); continue; }
     const xs=sx.get(k).sort((a,b)=>a-b); const x=xs[xs.length>>1]/sc, y=top.get(k)/sc+6;
     const lv=parseInt(b.t['building:levels']);
@@ -245,6 +252,12 @@ function compute(){
     c.name=c.grp;   // v3.7.2 동 번호는 빼고 단지 이름만(«101동»은 눈으로 보면 된다)
     c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')));
     return c;}).sort((a,b)=>b.score-a.score);
+  // v3.10 한 덩어리로 보이는 것은 이름표 하나 — 화면에서 28 px 안에 붙어 있고 거리도 비슷하면(±25%) 센 쪽만 남기고 나머지는 점으로.
+  //  (11-15 사진: 갤러리아 포레 한 단지에 «한화 갤러리아 포레스트 타워»·«더서울라이티움» 이름표가 겹쳐 쌓였다.) 이미 떠 있던 것은 16 px 까지 봐준다(깜빡임 방지)
+  const DUP=[]; { const keep=[], pass=(sh,lim)=>{ for(const c of C){ if(S.shown.has(c.grp)!==sh) continue;
+        if(keep.some(k=>Math.abs(k.x-c.x)<lim&&Math.abs(k.d-c.d)<0.25*Math.max(k.d,c.d))) DUP.push(c); else keep.push(c); } };
+    pass(true,16); pass(false,28);                 // 떠 있던 것이 먼저 자리를 지키고, 새로 뜨려는 것은 28 px 떨어져야 한다
+    C.length=0; C.push(...keep.sort((a,b)=>b.score-a.score)); }
   const cap=S.simple?5:S.maxLabels, popOn=S.pop&&S.pop.until>Date.now();
   // v3.7 끈끈한 선택 — 한 번 뜬 이름표는 보이는 동안 자리를 지킨다.
   //  · 잠깐 안 보여도 0.8초는 마지막 자리에 둔다  · 다 찼을 때 교체는 «2초 넘게 떠 있던 것 중 가장 약한 것»보다 2배 강할 때만
@@ -258,19 +271,26 @@ function compute(){
     if(chosen.length+grace.length<cap||(popOn&&S.pop.key===c.grp)){ chosen.push(c); continue; }
     let wi=-1,ws=1e9; chosen.forEach((x,i)=>{const st=S.stick.get(x.grp); if(st&&now-st.t0>2000&&x.score<ws){ws=x.score;wi=i;}});
     if(wi>=0&&c.score>2*ws){ S.stick.delete(chosen[wi].grp); chosen[wi]=c; } }
-  for(const c of chosen) if(!S.stick.has(c.grp)) S.stick.set(c.grp,{t0:now,seen:now,lab:null});
-  const L=chosen.map(c=>({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp})).concat(grace), dots=[];
-  for(const c of C){ if(dots.length>=12) break; if(!chosen.includes(c)) dots.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 점도 다음 12개까지만
+  for(const c of chosen) if(!S.stick.has(c.grp)) S.stick.set(c.grp,{t0:now,seen:now,lab:{x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}});   // v3.10 lab 을 비워 두면 바로 다음 계산에서 빠질 때 null 이 이름표 목록에 섞여 계산이 멈췄다
+  const L=chosen.map(c=>({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp})).concat(grace.filter(Boolean)), dots=[];
+  for(const c of DUP){ if(popOn&&S.pop.key===c.grp&&!L.some(l=>l.key===c.grp)) L.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 겹쳐서 점이 된 것도 톡 하면 이름이 뜬다
+  for(const c of C.concat(DUP)){ if(dots.length>=12) break; if(!L.some(l=>l.key===c.grp)) dots.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 점도 다음 12개까지만
   if(S.showPeaks){ const P=[], seen=new Set();
     for(const p of S.peaks){
       const q=project(B,p.az,elev(p.top-S.eye,p.d)); if(!q) continue; const [x,y]=q; if(x<0||x>VIEW.W||y<0||y>VIEW.H) continue;
-      const ox=Math.floor(x*sc),oy=Math.floor(y*sc),i=(oy*w+ox)*4; if(data[i+3]>0) continue;
+      const ox=Math.floor(x*sc),oy=Math.floor(y*sc),i=(oy*w+ox)*4, pk='⛰'+p.name; S.pkT=S.pkT||new Map();
+      if(data[i+3]>0){ if(!(now-(S.pkT.get(pk)||0)<1500)) continue; } else S.pkT.set(pk,now);   // v3.10 건물 모서리에 걸린 봉우리가 깜빡이지 않게 — 가려져도 1.5초는 둔다
       P.push({x,y,name:p.name,sub:`${(p.d/1000).toFixed(1)} km · 해발 ${Math.round(p.top)} m`,peak:true,key:'⛰'+p.name,top:p.top});
     }
-    P.sort((a,b)=>b.top-a.top); const PU=P.filter(p=>!seen.has(p.name)&&seen.add(p.name));   // 같은 이름 봉우리는 높은 쪽만
+    P.sort((a,b)=>b.top-a.top); const PU0=P.filter(p=>!seen.has(p.name)&&seen.add(p.name)), PU=[];   // 같은 이름 봉우리는 높은 쪽만
+    const sh=p=>S.shown.has(p.key)?1:0;
+    for(const p of [...PU0].sort((a,b)=>sh(b)-sh(a))){ const lim=sh(p)?20:34, j=PU.findIndex(q=>Math.abs(q.x-p.x)<lim&&Math.abs(q.y-p.y)<lim);   // v3.10 같은 산의 두 이름(청계산·망경대)은 하나만 — «…산»을 먼저. 떠 있던 것이 자리를 지킨다(깜빡임 방지)
+      if(j<0) PU.push(p); else if(/산$/.test(p.name)&&!/산$/.test(PU[j].name)) PU[j]=p; }
+    PU.sort((a,b)=>b.top-a.top);
     PU.forEach((p,i)=>{ if(!S.simple||i<2) L.push(p); });   // 간단: 높은 산 2개
   }
   S.labels=L; S.dots=S.simple?dots:[]; S.shown=new Set(L.map(l=>l.key));
+  if(!S.hinted&&L.some(l=>!l.peak)){ S.hinted=1; if(!S.hold) status('이름표가 건물과 어긋나 있으면 화면을 좌우로 끌어 맞추세요'); }   // v3.10 처음 한 번 알려 준다
   // v3.6 골목: 바로 옆 벽이 화면 대부분이면 «가려 있음»을 알린다(이름표 0개가 고장으로 보이지 않게)
   let near=0; for(const [k,n] of cnt) if(shapes.get(k).d<40) near+=n;
   const blocked=!L.some(l=>!l.peak)&&near>0.35*w*h, hint='가까운 건물에 가려 있어요 — 트인 쪽을 비춰 보세요';
@@ -282,22 +302,42 @@ function drawDots(g){
 }
 
 /* ---------- 그리기 ---------- */
-function drawLabels(g,L,scale=1){
-  const boxes=[]; g.textBaseline='top'; S.lift=S.lift||new Map();
-  for(const l of L){ g.globalAlpha=l.a==null?1:l.a;
+// v3.10 자리 잡기 — 상자를 점 바로 위 가운데뿐 아니라 왼쪽·오른쪽으로도 비켜 놓는다(선은 늘 점에서 곧게 위로).
+//  예전에는 가운데만 써서 건물 서넛이 모이면 이름표가 탑처럼 쌓이고, 선이 남의 글씨를 가로지르고, 화면 가장자리에서 잘렸다(11-15 사진)
+function drawLabels(g,L,scale=1,avoid=[]){
+  g.textBaseline='top'; S.lift=S.lift||new Map();
+  const W=VIEW.W, H=VIEW.H, boxes=avoid.map(r=>[r[0],r[1],r[2],r[3],-1]), dots=[], lines=[], P=[];   // boxes = 이미 놓인 상자·단추(절대 안 겹침) · dots = 남의 점 · lines = 남의 선(되도록 안 겹침)
+  L.forEach((l,i)=>dots.push([l.x-6*scale,l.y-6*scale,l.x+6*scale,l.y+6*scale,i]));
+  const over=(Q,x0,y0,x1,y1,me,m=2)=>Q.some(q=>q[4]!==me&&!(x1+m<q[0]||x0-m>q[2]||y1+m<q[1]||y0-m>q[3]));   // m = 띄울 틈(px). 음수면 그만큼 겹쳐도 봐준다
+  const ups=[],downs=[]; for(let v=26;v<480;v+=18) ups.push(v); for(let v=26;v<420;v+=18) downs.push(-v);
+  L.forEach((l,i)=>{
     const f1=15*scale,f2=11*scale; g.font=`700 ${f1}px -apple-system,"Apple SD Gothic Neo",sans-serif`; const w1=g.measureText(l.name).width; g.font=`${f2}px -apple-system,sans-serif`; const w2=g.measureText(l.sub).width;
-    const bw=Math.max(w1,w2)+16*scale, bh=f1+f2+14*scale; let bx,by,ok=false;
-    const free=()=>boxes.every(q=>bx+bw<q[0]||bx>q[2]||by+bh<q[1]||by>q[3]), prev=S.lift.get(l.key);
-    if(prev!=null){ bx=l.x-bw/2; by=l.y-prev*scale-bh; ok=by>=4&&free(); }   // v3.7 지난번 높이를 먼저 — 이름표가 위아래로 튀지 않게
-    if(!ok) for(let lift=26*scale;lift<480*scale;lift+=18*scale){bx=l.x-bw/2;by=l.y-lift-bh; if(by<4) break; if(free()){ok=true;break;}}
-    if(!ok&&prev!=null){ bx=l.x-bw/2; by=Math.max(4,l.y-prev*scale-bh); ok=true; }   // 자리가 없어도 숨기지 않는다(겹침 허용)
-    if(!ok) continue; boxes.push([bx,by,bx+bw,by+bh]); if(scale===1) S.lift.set(l.key,(l.y-by-bh));
-    g.strokeStyle='rgba(255,255,255,.85)'; g.lineWidth=2*scale; g.beginPath(); g.moveTo(l.x,l.y); g.lineTo(l.x,by+bh); g.stroke();
-    g.fillStyle=l.peak?'#ffd60a':'#fff'; g.beginPath(); g.arc(l.x,l.y,4*scale,0,7); g.fill();
+    const bw=Math.max(w1,w2)+16*scale, bh=f1+f2+14*scale, s=Math.max(0,bw/2-14*scale);   // s = 옆으로 비킬 때 상자가 움직이는 거리(선이 상자 끝에서 14 px 안쪽에 닿는다)
+    let nl=1e9,nr=1e9; for(const o of L){ if(o===l||Math.abs(o.y-l.y)>140*scale) continue; const d=o.x-l.x; if(d>=0) nr=Math.min(nr,d); else nl=Math.min(nl,-d); }
+    const near=bw*0.7, sides=nr<near&&nl>=near?[-1,0,1]:nl<near&&nr>=near?[1,0,-1]:[0,-1,1];   // 옆 이름표가 붙어 있는 쪽의 반대편으로 먼저 비킨다
+    const yOf=lift=>lift>0?l.y-lift*scale-bh:l.y-lift*scale;      // lift>0 = 점 위로, lift<0 = 점 아래로(건물 꼭대기가 화면 위로 나가 위에 자리가 없을 때)
+    // 까다롭기 2 = 남의 점·선을 덮지 않고 내 선도 남의 상자를 지나지 않음 · 1 = 남의 점·선은 덮지 않음(내 선은 남의 상자 뒤로 지나도 됨) · 0 = 상자끼리만 안 겹침
+    const fit=(lift,sg,lv,m=2)=>{ const by=yOf(lift), e=m<0?0:4; if(by<e||by+bh>H-e) return null;
+      const bx=Math.max(2,Math.min(W-bw-2,l.x-bw/2+sg*s)); if(l.x<bx+8*scale||l.x>bx+bw-8*scale) return null;   // 화면 안으로 당기되, 선은 상자 변 안에 닿아야 한다
+      if(over(boxes,bx,by,bx+bw,by+bh,i,m)) return null;
+      if(lv>=1&&(over(dots,bx,by,bx+bw,by+bh,i)||over(lines,bx,by,bx+bw,by+bh,i))) return null;
+      if(lv>=2){ const y0=lift>0?by+bh+3:l.y+9*scale, y1=lift>0?l.y-9*scale:by-3; if(y1>y0&&over(boxes,l.x-1,y0,l.x+1,y1,i)) return null; }
+      return [bx,by]; };
+    const prev=S.lift.get(l.key); let pos=null, ch=null;
+    if(prev){ pos=fit(prev[0],prev[1],0,-6); if(pos) ch=prev; }                         // v3.7 지난번 자리를 먼저 — 이름표가 튀지 않게(6 px 까지 겹쳐도 그대로 둔다)
+    for(const [lv,list] of [[2,ups],[1,ups],[2,downs],[0,ups],[0,downs]]){ if(pos) break;  // 위쪽 깔끔한 자리 → 위쪽(선이 남의 상자 뒤로 지나도 됨) → 아래쪽 → 그래도 없으면 점을 덮더라도
+      for(const lift of list){ for(const sg of sides){ pos=fit(lift,sg,lv); if(pos){ ch=[lift,sg]; break; } } if(pos) break; } }
+    if(!pos&&prev){ ch=prev; pos=[Math.max(2,Math.min(W-bw-2,l.x-bw/2+prev[1]*s)),Math.max(4,yOf(prev[0]))]; }   // 자리가 없어도 떠 있던 것은 숨기지 않는다(겹침 허용)
+    if(!pos) return; boxes.push([pos[0],pos[1],pos[0]+bw,pos[1]+bh,i]); lines.push([l.x-1,Math.min(l.y,pos[1]),l.x+1,Math.max(l.y,pos[1]+bh),i]); if(scale===1) S.lift.set(l.key,ch);
+    P.push({l,bx:pos[0],by:pos[1],bw,bh,f1,f2});
+  });
+  for(const {l,by,bh} of P){ g.globalAlpha=l.a==null?1:l.a;      // 선·점을 먼저 다 그리고
+    g.strokeStyle='rgba(255,255,255,.85)'; g.lineWidth=2*scale; g.beginPath(); g.moveTo(l.x,l.y); g.lineTo(l.x,by+bh<l.y?by+bh:by); g.stroke();
+    g.fillStyle=l.peak?'#ffd60a':'#fff'; g.beginPath(); g.arc(l.x,l.y,4*scale,0,7); g.fill(); }
+  for(const {l,bx,by,bw,bh,f1,f2} of P){ g.globalAlpha=l.a==null?1:l.a;   // 상자·글씨는 그 위에 — 남의 선이 글씨를 가로지르지 않는다
     g.fillStyle='rgba(0,0,0,.6)'; g.beginPath(); g.roundRect(bx,by,bw,bh,9*scale); g.fill();
     g.fillStyle=l.peak?'#ffd60a':'#fff'; g.font=`700 ${f1}px -apple-system,"Apple SD Gothic Neo",sans-serif`; g.fillText(l.name,bx+8*scale,by+5*scale);
-    g.fillStyle='#ddd'; g.font=`${f2}px -apple-system,sans-serif`; g.fillText(l.sub,bx+8*scale,by+9*scale+f1);
-  }
+    g.fillStyle='#ddd'; g.font=`${f2}px -apple-system,sans-serif`; g.fillText(l.sub,bx+8*scale,by+9*scale+f1); }
   g.globalAlpha=1;
 }
 // v3.7 화면 이름표 = 목표 위치로 부드럽게 따라가고(30%/프레임), 새로 뜨면 서서히 나타나고, 빠지면 서서히 사라진다
@@ -314,30 +354,59 @@ function frame1(){
     if(!d){ d={...l,a:0}; DISP.set(l.key,d); }
     d.x+=(l.x-d.x)*0.3; d.y+=(l.y-d.y)*0.3; d.name=l.name; d.sub=l.sub; d.peak=l.peak; d.a=Math.min(1,d.a+0.12); }
   for(const [k,d] of DISP) if(!live.has(k)){ d.a-=0.08; if(d.a<=0){ DISP.delete(k); S.lift&&S.lift.delete(k); } }
-  drawLabels(g,[...DISP.values()].sort((a,b)=>b.a-a.a));
+  const now=performance.now(); if(!S.avoid||now-S.avoidT>400){ S.avoidT=now;   // 위쪽 알림 줄과 아래 단추는 피해서 놓는다(0.4초마다 자리 확인)
+    S.avoid=[$('status'),...document.querySelectorAll('#bar button:not([hidden])')].map(el=>el.getBoundingClientRect()).filter(r=>r.width).map(r=>[r.left-4,r.top-4,r.right+4,r.bottom+4]); }
+  drawLabels(g,[...DISP.values()].sort((a,b)=>b.a-a.a),1,S.avoid);
 }
 
 /* ---------- 센서 ---------- */
 function status(s){S.msg=s; drawStatus();}
 function drawStatus(){
   const gps=S.lat==null?'📍✗':`📍±${Math.round(S.acc)}m`;
-  const cb=camBasis()||{v:[0,1,0]}; const ori=S.beta==null?'🧭✗':`🧭${Math.round(headingOf(cb.v))}° ↕${Math.round(Math.asin(Math.max(-1,Math.min(1,cb.v[2])))/D2R)}°`;   // ↕ = 위로 든 각도(v3.6)
+  // 🧭 방향 ±나침반 스스로 매긴 오차 (보정값) 🔒붙드는 중 · ↕ 위로 든 각도 — 찰칵 사진만 보고도 원인을 가릴 수 있게(v3.10)
+  const cb=camBasis()||{v:[0,1,0]}; const ori=!S.M?'🧭✗':`🧭${Math.round(headingOf(cb.v))}°`+(S.cmpAcc>0?`±${Math.round(S.cmpAcc)}`:'')+(Math.abs(S.userOff)>=0.5?`(${S.userOff>0?'+':'−'}${Math.abs(Math.round(S.userOff))})`:'')+(S.hold?'🔒':'')+` ↕${Math.round(Math.asin(Math.max(-1,Math.min(1,cb.v[2])))/D2R)}°`;
   const data=S.blds.length?`🏢${S.blds.length}`:(S.loading?'🏢…':'🏢✗');
   const kk=geocoder?'K✓':'K…';
-  $('status').textContent=`${gps} ${ori} ${data} ${kk} 🏷${S.labels.length}`+(S.msg?` · ${S.msg}`:'');
+  const diag=`${gps} ${ori} ${data} ${kk} 🏷${S.labels.length}`; S.stat=diag+(S.msg?` · ${S.msg}`:'');
+  const el=$('status'); if(el.dataset.t!==S.stat){ el.dataset.t=S.stat; el.textContent=diag; if(S.msg){ const b=document.createElement('b'); b.textContent=S.msg; el.appendChild(b); } }   // 알림은 둘째 줄(세로 화면에서 잘리지 않게)
 }
 setInterval(()=>{ if(!$('hud').hidden) drawStatus(); },500);
+const HOLD_TAU=120;   // 방향을 맞춘 뒤 나침반을 다시 따라가는 빠르기(초) — 자이로는 1분에 1~2°쯤 흐르므로 아주 놓지는 않는다
 function onOri(e){
   if(e.alpha==null) return;
-  // v3.7 센서 평활 — 손떨림이 그대로 이름표 위치·선택으로 번지지 않게(약 0.2초 지수평균)
-  const k=0.25, ang=(o,n)=>o==null?n:((o+k*(((n-o+540)%360)-180))+360)%360, lin=(o,n)=>o==null?n:o+k*(n-o);
-  S.alpha=ang(S.alpha,e.alpha); S.beta=lin(S.beta,e.beta); S.gamma=lin(S.gamma,e.gamma);
-  if(typeof e.webkitCompassHeading==='number'){ // iOS: 나침반으로 alpha 기준을 맞춘다(자북→진북)
+  const ios=typeof e.webkitCompassHeading==='number';
+  if(e.absolute) S.absSeen=true; else if(S.absSeen&&!ios) return;   // 안드로이드: 절대·상대 두 이벤트가 같이 온다 → 절대만 쓴다
+  const now=performance.now(), gap=S.oriT?(now-S.oriT)/1000:0; S.oriT=now;
+  if(gap>2){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; }   // 센서가 끊겼다 다시 오면(앱 전환 등) 기준이 바뀌었을 수 있다 → 나침반부터 다시
+  // v3.10 센서 평활은 «회전 행렬»에 건다 — 각도(α·β·γ)를 따로 평활하면 폰을 가로로 들고 지평선 위를 볼 때 β가 +180°↔−180°를 넘나들며
+  //  그 사이 0.3초쯤 방향이 ±10°, 기울기가 십수 도 튄다(2026-11-15 모의 실험). 행렬은 그런 끊김이 없다. 세기는 예전과 같다(약 0.2초)
+  const N=eulerM(e.alpha,e.beta,e.gamma), M=S.M;
+  if(!M||N[6]*M[6]+N[7]*M[7]+N[8]*M[8]<0.9||N[0]*M[0]+N[1]*M[1]+N[2]*M[2]<0.9) S.M=N;   // 처음이거나 한 번에 25° 넘게 돌았으면 그대로 받는다
+  else { for(let i=0;i<9;i++) M[i]+=0.25*(N[i]-M[i]); ortho(M); }
+  if(ios){ // iOS: 나침반으로 방위 기준을 맞춘다(자북→진북)
     // iOS 나침반은 세로 기준 «기기 위쪽» 방향이다 — 가로로 들면 카메라와 90° 어긋나므로 화면 회전각을 더한다(v3.4)
-    const want=(e.webkitCompassHeading+scrAngle()+DECL+720)%360, raw=rawHeading();
-    const off=-(((want-raw+540)%360)-180);      // 시계 방향 차이 → alpha 감소
-    S.alphaOff = S.alphaOff==null?off:S.alphaOff+0.05*(((off-S.alphaOff+540)%360)-180);
+    const want=(e.webkitCompassHeading+scrAngle()+DECL+720)%360, off=-wrap(want-rawHeading());   // 시계 방향 차이 → 반시계 회전 감소
+    if(typeof e.webkitCompassAccuracy==='number') S.cmpAcc=e.webkitCompassAccuracy;
+    S.cmpOff = S.cmpOff==null?off:S.cmpOff+0.05*wrap(off-S.cmpOff);            // 나침반이 말하는 값(바로 따라감)
+    // v3.10 붙들기 — 방향을 한 번 맞춘 뒤(S.hold)에는 자이로(폰이 실제로 돈 만큼)를 믿고, 나침반은 2분에 걸쳐 천천히만 반영한다.
+    //  실내·창가에서는 같은 자리·같은 방향인데도 나침반이 +6°·+9°·+20° 로 날마다 달랐다(11-07·08·15 사진)
+    if(S.hold&&Math.abs(wrap(S.cmpOff-S.alphaOff))>40){ S.divT=S.divT||now; if(now-S.divT>3000){ S.hold=false; S.divT=0; } } else S.divT=0;   // 나침반과 40° 넘게 3초 벌어지면 자이로 기준이 바뀐 것 → 놓는다
+    const g=S.hold?Math.min(0.05,gap/HOLD_TAU):0.05;
+    S.alphaOff = S.alphaOff==null?off:S.alphaOff+g*wrap(off-S.alphaOff);
   } else if(e.absolute){ S.alphaOff=0; }
+}
+// v3.10 방향을 맞춘 직후(끌기·🔍·🧭)에 부른다 — 보정값을 «지금 나침반 기준»으로 다시 적어 저장하고(장소와 함께), 붙들기를 켠다
+function calibrated(){
+  if(S.cmpOff!=null&&S.alphaOff!=null){ S.userOff+=wrap(S.cmpOff-S.alphaOff); S.alphaOff=S.cmpOff; }   // 화면은 그대로, 숫자만 옮겨 적는다
+  S.userOff=wrap(S.userOff); S.hold=S.cmpOff!=null; S.away=false;
+  localStorage.hdgOff=S.userOff; if(S.lat!=null) localStorage.hdgAt=S.lat.toFixed(5)+','+S.lon.toFixed(5);
+  $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; S.oriT=0; } });   // 다른 앱에 갔다 오면 자이로 기준이 바뀔 수 있다
+function placeCheck(){ // v3.10 나침반 오차는 장소마다 다르다 → 보정한 곳에서 300 m 넘게 벗어나 있으면 보정을 쓰지 않고(0), 돌아오면 다시 쓴다
+  const at=(localStorage.hdgAt||'').split(',').map(Number); if(at.length!==2||!isFinite(at[0])||!isFinite(at[1])||S.lat==null) return;
+  const far=bd(at[0],at[1],S.lat,S.lon)[1]>300; if(far===!!S.away) return;
+  S.away=far; S.hold=false; S.userOff=far?0:+(localStorage.hdgOff||0); $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
 }
 function err(msg){const e=$('err'); e.innerHTML=msg; e.hidden=false;}
 const INAPP=/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\/|DaumApps|GSA\//i.test(navigator.userAgent);
@@ -352,12 +421,13 @@ async function start(){
     const v=$('cam'); v.srcObject=st; v.setAttribute('playsinline',''); v.muted=true; await v.play().catch(()=>{});
   }catch(e){ err('카메라를 켤 수 없어요: '+(e.name||'')+' '+(e.message||'')+(INAPP?'<br>카카오톡·네이버 앱 안의 브라우저에서는 막힐 수 있어요. <b>사파리로 열기</b>를 눌러 주세요.':'<br>설정 → 사파리 → 카메라 → 허용을 확인해 주세요.')); return; }
   try{ if(oriP){ const r=await oriP; S.oriPerm=r; } }catch(e){ S.oriPerm='error'; }
-  setTimeout(()=>{ if(S.beta==null) $('sensor').hidden=false; },1500);
+  setTimeout(()=>{ if(!S.M) $('sensor').hidden=false; },1500);
   $('start').hidden=true; $('hud').hidden=false;
   addEventListener('deviceorientationabsolute',onOri,true); addEventListener('deviceorientation',onOri,true);
   $('cam').addEventListener('loadedmetadata',updateView); $('cam').addEventListener('resize',updateView); addEventListener('resize',updateView); updateView();   // v3.8.1 영상 크기가 바뀔 때도(폰을 돌린 뒤 늦게 바뀜)
   navigator.geolocation.watchPosition(p=>{
     S.lat=p.coords.latitude; S.lon=p.coords.longitude; S.acc=p.coords.accuracy;
+    placeCheck();
     if(!S.loadedAt||bd(S.loadedAt[0],S.loadedAt[1],S.lat,S.lon)[1]>400) loadArea();
   },e=>status('위치 권한이 필요합니다'),{enableHighAccuracy:true,maximumAge:5000});
   initKakao(); setInterval(compute,180); frame();
@@ -371,7 +441,7 @@ async function shot(){
   g.drawImage(v,(c.width-dw)/2,(c.height-dh)/2,dw,dh);
   g.save(); g.scale(k,k); drawLabels(g,S.labels); g.restore();
   g.font=`600 ${14*k}px sans-serif`; g.fillStyle='rgba(255,255,255,.8)'; g.textAlign='right'; g.fillText('저게뭐야?',c.width-12*k,c.height-12*k);
-  g.font=`${10*k}px sans-serif`; g.textAlign='left'; g.fillStyle='rgba(255,255,255,.6)'; g.fillText($('status').textContent.slice(0,90),10*k,c.height-12*k);
+  g.font=`${10*k}px sans-serif`; g.textAlign='left'; g.fillStyle='rgba(255,255,255,.6)'; g.fillText(('v'+VER+' '+(S.stat||'')).slice(0,110),10*k,c.height-12*k);
   const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',0.9));
   const f=new File([blob],`저게뭐야_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'')}.jpg`,{type:'image/jpeg'});
   if(navigator.canShare&&navigator.canShare({files:[f]})){ try{await navigator.share({files:[f]});return;}catch(e){} }
@@ -384,16 +454,17 @@ function openCalib(){
   const list=$('calibList'); list.innerHTML='';
   const cands=S.blds.filter(b=>b.t.name&&!BAD.test(b.t.name)&&b.h>=60).sort((a,b)=>b.h-a.h).slice(0,24);
   for(const b of cands){const bt=document.createElement('button'); bt.textContent=b.t.name; bt.onclick=()=>{
-      const B=camBasis(); if(!B) return; const cur=headingOf(B.v); const d=((b.az-cur+540)%360)-180; S.userOff+=d; $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°'; localStorage.hdgOff=S.userOff; };
+      const B=camBasis(); if(!B) return; const cur=headingOf(B.v); const d=((b.az-cur+540)%360)-180; S.userOff+=d; calibrated(); status(`🧭 «${b.t.name}»에 맞췄어요`); };
     list.appendChild(bt);}
 }
 $('go').onclick=start;
 $('sensor').onclick=async()=>{ try{ const r=await DeviceOrientationEvent.requestPermission(); S.oriPerm=r; if(r==='granted'){ $('sensor').hidden=true; return; } }catch(e){ S.oriPerm='error'; }
   S.manual=true; $('sensor').hidden=true; status('센서 없이: 🧭에서 방향을 맞추세요'); }; $('shot').onclick=shot; $('calib').onclick=openCalib;
 $('calibDone').onclick=()=>{$('calibPanel').hidden=true;$('cross').hidden=true;};
-$('hdg').value=S.userOff; $('hdgV').textContent=S.userOff+'°'; $('hdg').oninput=e=>{S.userOff=+e.target.value;$('hdgV').textContent=S.userOff+'°';localStorage.hdgOff=S.userOff;};
+$('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°'; $('hdg').oninput=e=>{S.userOff=+e.target.value;$('hdgV').textContent=S.userOff+'°';localStorage.hdgOff=S.userOff;}; $('hdg').onchange=calibrated;
+$('calibReset').onclick=()=>{ S.userOff=0; S.hold=false; localStorage.removeItem('hdgOff'); localStorage.removeItem('hdgAt'); $('hdg').value=0; $('hdgV').textContent='0°'; status('🧭 보정을 지웠어요 — 나침반 그대로'); };
 $('fov').value=S.fov; $('fovV').textContent=S.fov+'°'; $('fov').oninput=e=>{S.fov=+e.target.value;$('fovV').textContent=S.fov+'°';localStorage.fov2=S.fov;updateView();};
-$('settings').onclick=()=>{$('setPanel').hidden=false;$('calibPanel').hidden=true;$('cross').hidden=true;};
+$('settings').onclick=()=>{$('setPanel').hidden=false;$('calibPanel').hidden=true;$('cross').hidden=true; aiPing();};
 $('setDone').onclick=()=>{$('setPanel').hidden=true;};
 $('floor2').onchange=e=>{S.floor=+e.target.value||1; S.eye=S.ground+(S.floor-1)*2.8+1.5;};
 $('showPeaks').onchange=e=>{S.showPeaks=e.target.checked;};
@@ -403,11 +474,35 @@ $('mode').onclick=()=>{ S.simple=!S.simple; localStorage.simple=S.simple?'1':'0'
 modeBtn();
 // 점 톡 → 4초간 그 이름표를 띄운다
 document.addEventListener('click',e=>{
-  if($('hud').hidden||e.target.closest('button,input,label,#setPanel,#calibPanel')) return;
+  if($('hud').hidden||Date.now()<(S.noClick||0)||e.target.closest('button,input,label,#setPanel,#calibPanel')) return;
   let best=null,bd2=44*44; for(const l of S.dots){const d2=(l.x-e.clientX)**2+(l.y-e.clientY)**2; if(d2<bd2){bd2=d2;best=l;}}
   if(best){ S.pop={key:best.key,until:Date.now()+4000}; compute(); }
 });
 $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hidden=true;};
+
+/* ---------- v3.10 끌어서 맞추기 — 이름표가 옆으로 밀려 있으면 화면을 좌우로 끌어 건물 위에 놓는다(나침반 오차를 눈으로 바로잡기) ---------- */
+let drag=null;
+const fmtD=d=>(d>=0?'+':'−')+Math.abs(d).toFixed(1)+'°';
+function turnLabels(d){ // 방향을 d° 돌린 만큼 화면 속 이름표를 바로 옮긴다 — 다음 계산(0.2초 뒤)을 기다리지 않고 손가락을 따라오게
+  const cx=VIEW.W/2, f=VIEW.f, mv=o=>{ o.x=cx+f*Math.tan(Math.max(-1.5,Math.min(1.5,Math.atan((o.x-cx)/f)+d*D2R))); };
+  S.labels.forEach(mv); S.dots.forEach(mv); DISP.forEach(mv);
+}
+addEventListener('pointerdown',e=>{
+  if($('hud').hidden||!e.isPrimary||!camBasis()||!e.target.closest||e.target.closest('button,input,label,#setPanel,#calibPanel,#aiView,#err')) return;
+  if(e.clientX<16||e.clientX>innerWidth-16) return;   // 화면 가장자리(폰을 쥔 손·뒤로 가기 쓸기)는 뺀다
+  drag={x0:e.clientX,y0:e.clientY,x:e.clientX,on:false,from:S.userOff};
+});
+addEventListener('pointermove',e=>{
+  if(!drag||!e.isPrimary) return;
+  if(!drag.on){ const dx=Math.abs(e.clientX-drag.x0), dy=Math.abs(e.clientY-drag.y0);
+    if(dy>30&&dy>dx){ drag=null; return; }          // 위아래로 쓸면 끌기가 아니다
+    if(dx<12||dx<1.5*dy) return; drag.on=true; }                    // 여기까지 온 12 px 도 버리지 않는다(이름표가 손가락에 붙어 온다)
+  const cx=VIEW.W/2, a=x=>Math.atan((x-cx)/VIEW.f)/D2R, d=a(e.clientX)-a(drag.x); drag.x=e.clientX; if(!d) return;
+  S.userOff-=d; turnLabels(d); status(`🧭 끌어서 맞추는 중 ${fmtD(wrap(S.userOff-drag.from))}`);   // 오른쪽으로 끌면 이름표가 오른쪽으로 = 방향값은 줄어든다
+});
+function dragEnd(e){ if(!drag||!e.isPrimary) return; const d=drag; drag=null; if(!d.on) return;
+  S.noClick=Date.now()+400; const t=wrap(S.userOff-d.from); calibrated(); compute(); status(`🧭 방향을 ${fmtD(t)} 맞췄어요`); }
+addEventListener('pointerup',dragEnd); addEventListener('pointercancel',dragEnd);
 
 /* ---------- v3.7 «찍고 확인»(B) 자리 — AI 판정은 앱 밖(하박사님 개인 중계 주소)이 한다 ----------
    설정 ⚙︎ 의 «AI 확인 주소»를 채우면 🔍 버튼이 나타난다. 비워 두면 아무것도 밖으로 나가지 않는다.
@@ -417,9 +512,18 @@ $('reload').onclick=()=>{S.loadedAt=null; if(S.lat) loadArea(); $('setPanel').hi
    자세한 약속·프롬프트 = AI_HANDOFF.md */
 function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('privacy').textContent=localStorage.aiUrl?'🔍를 누를 때만 사진을 AI로 보냅니다.':'사진은 폰 밖으로 나가지 않습니다.';   // v3.7.4
   $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
-$('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); };
-$('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); };
+$('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); aiPing(); };
+$('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); aiPing(); };
 aiOn();
+// v3.10 암호 확인 — 사진 없는 빈 요청을 보낸다(Worker 는 AI 를 부르지 않고 바로 답한다). 🔍를 눌러 보고서야 401 을 알던 문제(11-15)
+async function aiPing(){
+  const url=localStorage.aiUrl, el=$('aiOk'); if(!url){ el.textContent=''; return; }
+  el.textContent='확인 중…'; const ac=new AbortController(), kill=setTimeout(()=>ac.abort(),8000);
+  try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:'{}'});
+    el.textContent=r.ok?'✅ 연결됨':(r.status===401?'❌ 암호가 달라요':'❌ 오류 '+r.status); }
+  catch(e){ el.textContent='❌ 주소에 닿지 않아요'; }
+  clearTimeout(kill);
+}
 async function aiCheck(){
   const url=localStorage.aiUrl; if(!url) return;
   const v=$('cam'), W=VIEW.W, H=VIEW.H, k=Math.min(1024/Math.max(W,H),2);
@@ -433,7 +537,9 @@ async function aiCheck(){
   if(S.aiBusy) return; S.aiBusy=true; const t0=Date.now(), ac=new AbortController();
   const tick=setInterval(()=>status(`🔍 AI에게 묻는 중… ${Math.round((Date.now()-t0)/1000)}초`),1000), kill=setTimeout(()=>ac.abort(),50000);   // 50초 넘으면 포기(Worker 는 15+25초 안에 끝냄)
   status('🔍 AI에게 묻는 중…');
-  let res; try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({})); if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 401·413 도 이유를 보이게
+  let res; try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({}));
+    if(r.status===401) throw new Error('암호가 달라요. ⚙︎에서 «AI 암호»를 다시 넣어 주세요');   // v3.10 숫자(401) 대신 할 일을 알려 준다
+    if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 413 등도 이유를 보이게
   catch(e){ status('🔍 AI 확인 실패 — '+(e.name==='AbortError'?'50초 안에 답이 없음':e.message)); return; }
   finally{ clearInterval(tick); clearTimeout(kill); S.aiBusy=false; }
   status(`🔍 답 받음 ${Math.round((Date.now()-t0)/1000)}초`);
@@ -444,7 +550,7 @@ async function aiCheck(){
   // v3.9 자동 보정 — AI가 찍은 실제 위치와 지도로 계산한 위치의 각도 차이(중앙값)만큼 나침반을 돌린다
   const fix=aiFix(res.labels||[],byKey,byName,k); if(fix) status(fix);
   // 멈춘 사진 위에 이름표 — 톡 하면 닫힘
-  const view=document.createElement('canvas'), dpr=devicePixelRatio||1; view.width=W*dpr; view.height=H*dpr;
+  const view=document.createElement('canvas'), dpr=devicePixelRatio||1; view.width=W*dpr; view.height=H*dpr; view.id='aiView';
   Object.assign(view.style,{position:'fixed',inset:'0',width:W+'px',height:H+'px',zIndex:50,background:'#000'});
   const vg=view.getContext('2d'); vg.setTransform(dpr,0,0,dpr,0,0); vg.drawImage(c,0,0,W,H); drawLabels(vg,L);
   vg.font='600 13px sans-serif'; vg.fillStyle='rgba(255,255,255,.85)'; vg.fillText(`🔍 AI 확인 ${L.length}개 · 톡 하면 닫기`,12,H-16);
@@ -454,11 +560,13 @@ $('ai').onclick=aiCheck;
 function aiFix(labels,byKey,byName,k){
   const cx=VIEW.W/2, ang=x=>Math.atan((x-cx)/VIEW.f)/D2R, D=[];
   for(const r of labels){ const cd=byKey.get(r.key)||byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<0.6) continue;
-    const d=ang(r.x/k)-ang(cd.x/k); if(Math.abs(d)<25) D.push(d); }
+    const d=ang(r.x/k)-ang(cd.x/k); if(Math.abs(d)<45) D.push(d); }
   if(!D.length) return null;
-  D.sort((a,b)=>a-b); const m=D[D.length>>1], spread=D[D.length-1]-D[0];
-  if(D.length>=2&&spread>6) return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${spread.toFixed(0)}°)`;
-  if(Math.abs(m)<0.7) return `🧭 방향 정확(${m>=0?'+':''}${m.toFixed(1)}°)`;
-  S.userOff=((S.userOff-m+540)%360)-180; localStorage.hdgOff=S.userOff; $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
-  return `🧭 자동 보정 ${-m>=0?'+':''}${(-m).toFixed(1)}° (건물 ${D.length}개 기준)`;
+  // v3.10 가운데값에서 4° 안에 드는 건물이 과반(둘 이상)이면 그 평균으로 맞춘다 — 예전 «최대−최소 6° 이내»는 한 동만 옆 동으로 잘못 짚혀도 포기했다(11-15 사진: 16~22°, 폭 5.6°로 아슬아슬)
+  D.sort((a,b)=>a-b); const med=D.length%2?D[D.length>>1]:(D[D.length/2-1]+D[D.length/2])/2;
+  const In=D.filter(d=>Math.abs(d-med)<=4), m=In.reduce((a,b)=>a+b,0)/In.length;
+  if(D.length>=2&&In.length<Math.max(2,Math.ceil(D.length*0.6))) return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${(D[D.length-1]-D[0]).toFixed(0)}°)`;
+  if(Math.abs(m)<0.7){ calibrated(); return `🧭 방향 정확(${fmtD(m)})`; }
+  S.userOff-=m; calibrated();
+  return `🧭 자동 보정 ${fmtD(-m)} (건물 ${In.length}개 기준)`;
 }

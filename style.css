@@ -1,6 +1,7 @@
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 [hidden]{display:none!important}
-html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,"Apple SD Gothic Neo","Pretendard",sans-serif;overflow:hidden}
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,"Apple SD Gothic Neo","Pretendard",sans-serif;overflow:hidden;touch-action:none}   /* v3.10 끌어서 맞추기 — 브라우저가 쓸기를 가로채지 않게 */
+#cam{touch-action:none}
 #cam,#overlay{position:fixed;inset:0;width:100vw;height:100vh;object-fit:cover}
 #overlay{pointer-events:none;z-index:1;transform:translateZ(0)}   /* v3.7.5 아이폰: 비디오 층 위로 확실히 */
 #hud,#start,#calibPanel,#setPanel,#cross{z-index:2}
@@ -26,4 +27,5 @@ button{font:inherit;border:0;border-radius:14px;padding:12px 22px;background:#00
 #err{position:fixed;left:12px;right:12px;top:40%;background:rgba(180,30,40,.92);padding:14px;border-radius:14px;font-size:14px;line-height:1.5;z-index:9}
 #sensor{position:fixed;left:50%;top:46%;transform:translateX(-50%);z-index:8;font-size:18px;padding:14px 22px}
 #status{max-width:94vw;overflow:hidden;text-overflow:ellipsis}
+#status b{display:block;margin-top:2px;font-size:13px;font-weight:600;white-space:normal;text-align:center;line-height:1.35}   /* v3.10 알림은 둘째 줄 */
 #bar #mode{font-size:14px;font-weight:700}
