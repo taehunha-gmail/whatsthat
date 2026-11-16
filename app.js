@@ -1,7 +1,7 @@
 'use strict';
-/* 저게뭐야? v3.12 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.12.1 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
-const VER='3.12';
+const VER='3.12.1';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -448,8 +448,8 @@ async function shot(){
   if(driveOn()){ S.lastShot=f; saveDrive(blob,f.name,meta); return; }   // v3.12 드라이브 저장이 켜져 있으면 공유 창 없이 바로 올린다
   shareFile(f);
 }
-async function shareFile(f){
-  if(navigator.canShare&&navigator.canShare({files:[f]})){ try{await navigator.share({files:[f]});return;}catch(e){} }
+async function shareFile(f){   // 공유 창 — «이미지 저장»을 누르면 폰 사진첩에 들어간다(웹앱은 사진첩에 직접 못 넣는다: 애플 규칙)
+  if(navigator.canShare&&navigator.canShare({files:[f]})){ try{await navigator.share({files:[f]});return;}catch(e){ if(e.name==='AbortError') return; } }   // v3.12.1 공유 창을 닫았으면 끝 — 예전엔 이어서 «다운로드» 창이 또 떴다
   const a=document.createElement('a'); a.href=URL.createObjectURL(f); a.download=f.name; a.click();
 }
 function shotName(){ const d=new Date(), p=n=>String(n).padStart(2,'0');   // 폰 시각(한국 시각)으로 — 예전엔 UTC 라 아침 7시 사진이 «22시»로 찍혔다
