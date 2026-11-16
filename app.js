@@ -1,7 +1,7 @@
 'use strict';
-/* 저게뭐야? v3.11 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.12 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
-const VER='3.11';
+const VER='3.12';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -430,12 +430,13 @@ async function start(){
     placeCheck();
     if(!S.loadedAt||bd(S.loadedAt[0],S.loadedAt[1],S.lat,S.lon)[1]>400) loadArea();
   },e=>status('위치 권한이 필요합니다'),{enableHighAccuracy:true,maximumAge:5000});
-  initKakao(); setInterval(compute,180); setInterval(autoTick,500); frame();
+  initKakao(); setInterval(compute,180); setInterval(autoTick,500); frame(); if(localStorage.aiUrl) aiPing();   // v3.12 켤 때 암호·드라이브 저장 준비를 조용히 확인
 }
 
 /* ---------- 찰칵 ---------- */
 async function shot(){
-  const v=$('cam'),W=VIEW.W,H=VIEW.H,k=Math.min(3,v.videoWidth/W*1.0||2);
+  if(S.shareNext>Date.now()&&S.lastShot){ S.shareNext=0; shareFile(S.lastShot); status('📤 저장 못 한 사진을 공유 창으로 보냅니다'); return; }   // v3.12 드라이브 저장이 실패한 직후의 📸 = 그 사진을 공유 창으로
+  const meta=shotMeta(), v=$('cam'),W=VIEW.W,H=VIEW.H,k=Math.min(3,v.videoWidth/W*1.0||2);
   const c=document.createElement('canvas'); c.width=W*k; c.height=H*k; const g=c.getContext('2d');
   const s=Math.max(c.width/v.videoWidth,c.height/v.videoHeight), dw=v.videoWidth*s, dh=v.videoHeight*s;
   g.drawImage(v,(c.width-dw)/2,(c.height-dh)/2,dw,dh);
@@ -443,9 +444,44 @@ async function shot(){
   g.font=`600 ${14*k}px sans-serif`; g.fillStyle='rgba(255,255,255,.8)'; g.textAlign='right'; g.fillText('저게뭐야?',c.width-12*k,c.height-12*k);
   g.font=`${10*k}px sans-serif`; g.textAlign='left'; g.fillStyle='rgba(255,255,255,.6)'; g.fillText(('v'+VER+' '+(S.stat||'')).slice(0,110),10*k,c.height-12*k);
   const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',0.9));
-  const f=new File([blob],`저게뭐야_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'')}.jpg`,{type:'image/jpeg'});
+  const f=new File([blob],shotName(),{type:'image/jpeg'});
+  if(driveOn()){ S.lastShot=f; saveDrive(blob,f.name,meta); return; }   // v3.12 드라이브 저장이 켜져 있으면 공유 창 없이 바로 올린다
+  shareFile(f);
+}
+async function shareFile(f){
   if(navigator.canShare&&navigator.canShare({files:[f]})){ try{await navigator.share({files:[f]});return;}catch(e){} }
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=f.name; a.click();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(f); a.download=f.name; a.click();
+}
+function shotName(){ const d=new Date(), p=n=>String(n).padStart(2,'0');   // 폰 시각(한국 시각)으로 — 예전엔 UTC 라 아침 7시 사진이 «22시»로 찍혔다
+  return `저게뭐야_${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`; }
+
+/* ---------- v3.12 찰칵 → 내 구글 드라이브 «저게뭐야 사진» 폴더 ----------
+   앱 → Worker({shot:true,name,data}) → Apps Script 웹 앱(tool/drive_save.gs, Worker 의 DRIVE_URL) → 드라이브.
+   Worker 가 DRIVE_URL 을 갖고 있으면 암호 확인 답에 drive:true 가 오고, 그때만 ⚙︎ 에 «찰칵 사진 드라이브에 저장»이 보인다(기본 켬).
+   드라이브로 가는 사진에는 진단용 기록(JPEG 설명 칸 COM: 판·시각·위치·방향·보정값·화각·이름표 자리)을 넣는다 — 공유 창으로 내보내는 사진에는 넣지 않는다 */
+const driveOn=()=>!!localStorage.aiUrl&&localStorage.drive==='1'&&localStorage.driveSave!=='0';
+function shotMeta(){ const B=camBasis()||{v:[0,1,0],r:[1,0,0]}, as=x=>+(Math.asin(Math.max(-1,Math.min(1,x)))/D2R).toFixed(1);
+  return {app:'저게뭐야',v:VER,t:new Date().toISOString(),lat:S.lat==null?null:+S.lat.toFixed(6),lon:S.lon==null?null:+S.lon.toFixed(6),acc:Math.round(S.acc||0),
+    floor:S.floor,eye:Math.round(S.eye),hdg:+headingOf(B.v).toFixed(1),pitch:as(B.v[2]),roll:as(B.r[2]),off:+S.userOff.toFixed(2),hold:S.hold,cmpAcc:S.cmpAcc,
+    auto:{n:AUTO.n,done:AUTO.done},scr:scrAngle(),fov:S.fov,W:VIEW.W,H:VIEW.H,f:+(VIEW.f||0).toFixed(1),vw:VIEW.vw,vh:VIEW.vh,simple:S.simple,msg:S.msg||'',
+    labels:S.labels.slice(0,40).map(l=>[l.name,Math.round(l.x),Math.round(l.y)])}; }
+function jpegNote(buf,text){ // JPEG 안에 설명(COM) 칸을 끼워 넣는다 — 그림은 그대로, 사진 보기 앱에는 안 보인다
+  const b=new Uint8Array(buf), t=new TextEncoder().encode(text); if(t.length>65000||b[0]!==0xFF||b[1]!==0xD8) return new Blob([b],{type:'image/jpeg'});
+  let i=2; while(i+4<b.length&&b[i]===0xFF&&b[i+1]>=0xE0&&b[i+1]<=0xEF) i+=2+(b[i+2]<<8|b[i+3]);   // 맨 앞(SOI) 뒤 APPn 칸들은 건너뛰고
+  const seg=new Uint8Array(4+t.length); seg[0]=0xFF; seg[1]=0xFE; seg[2]=(t.length+2)>>8; seg[3]=(t.length+2)&255; seg.set(t,4);
+  return new Blob([b.subarray(0,i),seg,b.subarray(i)],{type:'image/jpeg'});
+}
+const b64=blob=>new Promise((ok,no)=>{ const r=new FileReader(); r.onload=()=>ok(String(r.result).replace(/^data:[^,]*,/,'')); r.onerror=()=>no(r.error); r.readAsDataURL(blob); });
+async function saveDrive(blob,name,meta){
+  status('☁️ 드라이브에 저장 중…'); const ac=new AbortController(), kill=setTimeout(()=>ac.abort(),45000);
+  try{ const data=await b64(jpegNote(await blob.arrayBuffer(),JSON.stringify(meta)));
+    const r=await fetch(localStorage.aiUrl,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify({shot:true,name,data})});
+    const j=await r.json().catch(()=>({}));
+    if(r.status===401) throw new Error('암호가 달라요');
+    if(!r.ok||!j.ok) throw new Error(j.error||('오류 '+r.status));
+    status('☁️ 드라이브 «저게뭐야 사진» 폴더에 저장했어요'); }
+  catch(e){ S.shareNext=Date.now()+30000; status('☁️ 드라이브 저장 실패('+(e.name==='AbortError'?'45초 안에 답이 없음':String(e.message).slice(0,60))+') — 📸를 한 번 더 누르면 공유 창으로 보냅니다'); }
+  finally{ clearTimeout(kill); }
 }
 
 /* ---------- 보정·설정 ---------- */
@@ -510,20 +546,24 @@ addEventListener('pointerup',dragEnd); addEventListener('pointercancel',dragEnd)
                      candidates:[{key,name,x,y,d,h}]}   ← 지도로 뽑은 «화면 안 후보» 최대 20개, x·y는 사진 픽셀
    받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
    자세한 약속·프롬프트 = AI_HANDOFF.md */
-function aiOn(){ const on=!!localStorage.aiUrl, auto=on&&localStorage.autoCal!=='0';
+function aiOn(){ $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; aiUI(); }
+function aiUI(){ const on=!!localStorage.aiUrl, auto=on&&localStorage.autoCal!=='0';   // 입력 칸은 건드리지 않는다(쓰는 중에 지워지지 않게)
   $('ai').hidden=!on; $('autoCalRow').hidden=!on; $('autoCal').checked=localStorage.autoCal!=='0';
-  $('privacy').textContent=!on?'사진은 폰 밖으로 나가지 않습니다.':auto?'켤 때(방향 맞춤, 최대 3장)와 🔍를 누를 때 사진을 AI로 보냅니다.':'🔍를 누를 때만 사진을 AI로 보냅니다.';   // v3.7.4 · v3.11 보내는 때를 있는 그대로 적는다
-  $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
-$('autoCal').onchange=e=>{ localStorage.autoCal=e.target.checked?'1':'0'; aiOn(); };
+  $('driveRow').hidden=!(on&&localStorage.drive==='1'); $('driveSave').checked=localStorage.driveSave!=='0';
+  $('privacy').textContent=(!on?'사진은 폰 밖으로 나가지 않습니다.':auto?'켤 때(방향 맞춤, 최대 3장)와 🔍를 누를 때 사진을 AI로 보냅니다.':'🔍를 누를 때만 사진을 AI로 보냅니다.')   // v3.7.4 · v3.11 보내는 때를 있는 그대로 적는다
+    +(driveOn()?' 찰칵 사진은 내 구글 드라이브에 저장합니다.':''); }
+$('autoCal').onchange=e=>{ localStorage.autoCal=e.target.checked?'1':'0'; aiUI(); };
+$('driveSave').onchange=e=>{ localStorage.driveSave=e.target.checked?'1':'0'; aiUI(); };
 $('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); aiPing(); };
-$('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); aiPing(); };
+$('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiUI(); aiPing(); };
 aiOn();
 // v3.10 암호 확인 — 사진 없는 빈 요청을 보낸다(Worker 는 AI 를 부르지 않고 바로 답한다). 🔍를 눌러 보고서야 401 을 알던 문제(11-15)
 async function aiPing(){
   const url=localStorage.aiUrl, el=$('aiOk'); if(!url){ el.textContent=''; return; }
   el.textContent='확인 중…'; const ac=new AbortController(), kill=setTimeout(()=>ac.abort(),8000);
   try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:'{}'});
-    el.textContent=r.ok?'✅ 연결됨':(r.status===401?'❌ 암호가 달라요':'❌ 오류 '+r.status); }
+    el.textContent=r.ok?'✅ 연결됨':(r.status===401?'❌ 암호가 달라요':'❌ 오류 '+r.status);
+    if(r.ok){ const j=await r.json().catch(()=>({})); localStorage.drive=j.drive?'1':'0'; aiUI(); } }   // v3.12 Worker 에 드라이브 저장이 준비됐는지
   catch(e){ el.textContent='❌ 주소에 닿지 않아요'; }
   clearTimeout(kill);
 }

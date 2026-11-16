@@ -1,4 +1,4 @@
-// 저게뭐야 «찍고 확인» 중계 Worker — Cloudflare 편집기에 통째로 붙여 넣는다. 설명은 AI_HANDOFF.md 4절
+// 저게뭐야 «찍고 확인»·«찰칵 → 드라이브» 중계 Worker — Cloudflare 편집기에 통째로 붙여 넣는다. 설명은 AI_HANDOFF.md 4절
 const ALLOWED_ORIGIN = "https://taehunha-gmail.github.io";
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB
 
@@ -16,14 +16,33 @@ export default {
 
     if (request.method !== "POST") return reply({ error: "Method Not Allowed" }, 405);
     if (!env.APP_TOKEN || request.headers.get("X-App-Token") !== env.APP_TOKEN) return reply({ error: "Unauthorized" }, 401);
-    // ★1 모델 이름을 코드에 박지 않는다 — 옛 이름(1.5)은 이미 내려간 모델일 수 있음. 비어 있으면 원인을 알려 준다
-    if (!env.GEMINI_MODEL) return reply({ labels: [], error: "GEMINI_MODEL 미설정 — AI Studio 에서 보이는 최신 Flash 이름을 넣으세요" });
-    if (!env.GEMINI_API_KEY) return reply({ labels: [], error: "GEMINI_API_KEY 미설정" });
-
     if (parseInt(request.headers.get("Content-Length") || "0", 10) > MAX_BODY_BYTES) return reply({ error: "Payload Too Large" }, 413);
     const raw = await request.arrayBuffer();
     if (raw.byteLength > MAX_BODY_BYTES) return reply({ error: "Payload Too Large" }, 413);
     let p; try { p = JSON.parse(new TextDecoder().decode(raw)); } catch { return reply({ error: "Invalid JSON" }, 400); }
+
+    // ★8 찰칵 사진 → 내 구글 드라이브: {"shot":true,"name":…,"data":base64} 를 Apps Script 웹 앱(DRIVE_URL, Secret)으로 넘긴다.
+    //    Apps Script 코드 = 저장소 tool/drive_save.gs. 드라이브 «저게뭐야 사진» 폴더에 들어간다
+    if (p.shot) {
+      if (!env.DRIVE_URL) return reply({ ok: false, error: "DRIVE_URL 미설정" });
+      const data = String(p.data || "").replace(/^data:[^,]*,/, "");
+      if (!data) return reply({ ok: false, error: "사진이 비었음" });
+      const name = String(p.name || "저게뭐야.jpg").replace(/[\\/:*?"<>|]/g, "_").slice(0, 120);
+      try {
+        const r = await fetch(env.DRIVE_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ name, data }), redirect: "follow", signal: AbortSignal.timeout(30000) });
+        const t = await r.text(); let j = null; try { j = JSON.parse(t); } catch {}
+        if (!j) return reply({ ok: false, error: /accounts\.google|ServiceLogin|signin/i.test(t)
+          ? "드라이브 저장 주소가 로그인을 요구함 — Apps Script 배포의 액세스를 «모든 사용자»로" : `드라이브 저장 응답이 이상함(${r.status})` });
+        return reply(j.ok ? { ok: true, id: j.id, name: j.name } : { ok: false, error: "드라이브 저장 실패: " + String(j.error || "").slice(0, 120) });
+      } catch (e) { return reply({ ok: false, error: "드라이브 저장 주소에 닿지 않음: " + String(e).slice(0, 80) }); }
+    }
+    // 사진 없는 빈 요청 = 암호 확인(앱 ⚙︎ 의 ✅). 드라이브 저장이 준비됐는지도 알려 준다
+    if (!p.diag && !p.image) return reply({ labels: [], drive: !!env.DRIVE_URL });
+
+    // ★1 모델 이름을 코드에 박지 않는다 — 옛 이름(1.5)은 이미 내려간 모델일 수 있음. 비어 있으면 원인을 알려 준다
+    if (!env.GEMINI_MODEL) return reply({ labels: [], error: "GEMINI_MODEL 미설정 — AI Studio 에서 보이는 최신 Flash 이름을 넣으세요" });
+    if (!env.GEMINI_API_KEY) return reply({ labels: [], error: "GEMINI_API_KEY 미설정" });
 
     // ★7 점검: {"diag":true} 를 보내면 사진 없이 두 모델에 짧게 물어 상태·걸린 시간만 알려 준다
     const callG = async (model, body, ms) => { const t0 = Date.now();
