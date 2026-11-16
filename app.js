@@ -1,7 +1,7 @@
 'use strict';
-/* 저게뭐야? v3.10 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.11 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
-const VER='3.10';
+const VER='3.11';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -290,7 +290,7 @@ function compute(){
     PU.forEach((p,i)=>{ if(!S.simple||i<2) L.push(p); });   // 간단: 높은 산 2개
   }
   S.labels=L; S.dots=S.simple?dots:[]; S.shown=new Set(L.map(l=>l.key));
-  if(!S.hinted&&L.some(l=>!l.peak)){ S.hinted=1; if(!S.hold) status('이름표가 건물과 어긋나 있으면 화면을 좌우로 끌어 맞추세요'); }   // v3.10 처음 한 번 알려 준다
+  if(!S.hinted&&L.some(l=>!l.peak)){ S.hinted=1; if(!S.hold&&!autoOn()) status('이름표가 건물과 어긋나 있으면 화면을 좌우로 끌어 맞추세요'); }   // v3.10 처음 한 번 알려 준다(자동 맞춤이 켜져 있으면 그쪽이 알린다)
   // v3.6 골목: 바로 옆 벽이 화면 대부분이면 «가려 있음»을 알린다(이름표 0개가 고장으로 보이지 않게)
   let near=0; for(const [k,n] of cnt) if(shapes.get(k).d<40) near+=n;
   const blocked=!L.some(l=>!l.peak)&&near>0.35*w*h, hint='가까운 건물에 가려 있어요 — 트인 쪽을 비춰 보세요';
@@ -377,7 +377,7 @@ function onOri(e){
   const ios=typeof e.webkitCompassHeading==='number';
   if(e.absolute) S.absSeen=true; else if(S.absSeen&&!ios) return;   // 안드로이드: 절대·상대 두 이벤트가 같이 온다 → 절대만 쓴다
   const now=performance.now(), gap=S.oriT?(now-S.oriT)/1000:0; S.oriT=now;
-  if(gap>2){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; }   // 센서가 끊겼다 다시 오면(앱 전환 등) 기준이 바뀌었을 수 있다 → 나침반부터 다시
+  if(gap>2){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; S.ep=(S.ep||0)+1; }   // 센서가 끊겼다 다시 오면(앱 전환 등) 기준이 바뀌었을 수 있다 → 나침반부터 다시
   // v3.10 센서 평활은 «회전 행렬»에 건다 — 각도(α·β·γ)를 따로 평활하면 폰을 가로로 들고 지평선 위를 볼 때 β가 +180°↔−180°를 넘나들며
   //  그 사이 0.3초쯤 방향이 ±10°, 기울기가 십수 도 튄다(2026-11-15 모의 실험). 행렬은 그런 끊김이 없다. 세기는 예전과 같다(약 0.2초)
   const N=eulerM(e.alpha,e.beta,e.gamma), M=S.M;
@@ -402,7 +402,7 @@ function calibrated(){
   localStorage.hdgOff=S.userOff; if(S.lat!=null) localStorage.hdgAt=S.lat.toFixed(5)+','+S.lon.toFixed(5);
   $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
 }
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; S.oriT=0; } });   // 다른 앱에 갔다 오면 자이로 기준이 바뀔 수 있다
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ S.M=null; S.alphaOff=S.cmpOff=null; S.hold=false; S.oriT=0; S.ep=(S.ep||0)+1; } });   // 다른 앱에 갔다 오면 자이로 기준이 바뀔 수 있다
 function placeCheck(){ // v3.10 나침반 오차는 장소마다 다르다 → 보정한 곳에서 300 m 넘게 벗어나 있으면 보정을 쓰지 않고(0), 돌아오면 다시 쓴다
   const at=(localStorage.hdgAt||'').split(',').map(Number); if(at.length!==2||!isFinite(at[0])||!isFinite(at[1])||S.lat==null) return;
   const far=bd(at[0],at[1],S.lat,S.lon)[1]>300; if(far===!!S.away) return;
@@ -430,7 +430,7 @@ async function start(){
     placeCheck();
     if(!S.loadedAt||bd(S.loadedAt[0],S.loadedAt[1],S.lat,S.lon)[1]>400) loadArea();
   },e=>status('위치 권한이 필요합니다'),{enableHighAccuracy:true,maximumAge:5000});
-  initKakao(); setInterval(compute,180); frame();
+  initKakao(); setInterval(compute,180); setInterval(autoTick,500); frame();
 }
 
 /* ---------- 찰칵 ---------- */
@@ -510,8 +510,11 @@ addEventListener('pointerup',dragEnd); addEventListener('pointercancel',dragEnd)
                      candidates:[{key,name,x,y,d,h}]}   ← 지도로 뽑은 «화면 안 후보» 최대 20개, x·y는 사진 픽셀
    받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
    자세한 약속·프롬프트 = AI_HANDOFF.md */
-function aiOn(){ $('ai').hidden=!localStorage.aiUrl; $('privacy').textContent=localStorage.aiUrl?'🔍를 누를 때만 사진을 AI로 보냅니다.':'사진은 폰 밖으로 나가지 않습니다.';   // v3.7.4
+function aiOn(){ const on=!!localStorage.aiUrl, auto=on&&localStorage.autoCal!=='0';
+  $('ai').hidden=!on; $('autoCalRow').hidden=!on; $('autoCal').checked=localStorage.autoCal!=='0';
+  $('privacy').textContent=!on?'사진은 폰 밖으로 나가지 않습니다.':auto?'켤 때(방향 맞춤, 최대 3장)와 🔍를 누를 때 사진을 AI로 보냅니다.':'🔍를 누를 때만 사진을 AI로 보냅니다.';   // v3.7.4 · v3.11 보내는 때를 있는 그대로 적는다
   $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; }
+$('autoCal').onchange=e=>{ localStorage.autoCal=e.target.checked?'1':'0'; aiOn(); };
 $('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); aiPing(); };
 $('aiUrl').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiUrl=v; else localStorage.removeItem('aiUrl'); aiOn(); aiPing(); };
 aiOn();
@@ -524,31 +527,49 @@ async function aiPing(){
   catch(e){ el.textContent='❌ 주소에 닿지 않아요'; }
   clearTimeout(kill);
 }
-async function aiCheck(){
-  const url=localStorage.aiUrl; if(!url) return;
+// 사진 한 장 + 후보 목록을 Worker 로 보내고 답을 받는다 — 🔍 버튼과 «켤 때 방향 자동 맞춤»이 같이 쓴다(v3.11)
+async function aiAsk(onSec,limit){
   const v=$('cam'), W=VIEW.W, H=VIEW.H, k=Math.min(1024/Math.max(W,H),2);
   const c=document.createElement('canvas'); c.width=Math.round(W*k); c.height=Math.round(H*k); const g=c.getContext('2d');
   const s=Math.max(c.width/v.videoWidth,c.height/v.videoHeight), dw=v.videoWidth*s, dh=v.videoHeight*s;
   g.drawImage(v,(c.width-dw)/2,(c.height-dh)/2,dw,dh);
-  const B=camBasis()||{v:[0,1,0]};
+  const B=camBasis()||{v:[0,1,0]}, snap={off0:S.userOff,aOff0:S.alphaOff,ep:S.ep,f:VIEW.f};   // 사진 찍는 순간의 보정값·나침반·센서 번호·초점거리
   const cands=[...S.labels.filter(l=>!l.peak),...S.dots].slice(0,20).map(l=>({key:l.key,name:l.name,x:Math.round(l.x*k),y:Math.round(l.y*k),sub:l.sub}));
+  for(const l of wideCands(new Set(cands.map(x=>x.key)))) cands.push({key:l.key,name:l.name,x:Math.round(l.x*k),y:Math.round(l.y*k),sub:l.sub,out:true});
   const body={image:c.toDataURL('image/jpeg',0.85),w:c.width,h:c.height,heading:Math.round(headingOf(B.v)),
-    pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,candidates:cands};
-  if(S.aiBusy) return; S.aiBusy=true; const t0=Date.now(), ac=new AbortController();
-  const tick=setInterval(()=>status(`🔍 AI에게 묻는 중… ${Math.round((Date.now()-t0)/1000)}초`),1000), kill=setTimeout(()=>ac.abort(),50000);   // 50초 넘으면 포기(Worker 는 15+25초 안에 끝냄)
-  status('🔍 AI에게 묻는 중…');
-  let res; try{ const r=await fetch(url,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}); res=await r.json().catch(()=>({}));
+    pitch:Math.round(Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R),fov:S.fov,lat:S.lat,lon:S.lon,
+    candidates:cands.map(x=>x.out?{key:x.key,name:x.name,sub:x.sub}:x)};   // 화면 밖 후보는 위치 없이 이름만 — «계산상 사진 밖» 숫자를 주면 AI가 찾아보지도 않는다
+  const t0=Date.now(), ac=new AbortController(), tick=setInterval(()=>onSec&&onSec(Math.round((Date.now()-t0)/1000)),1000), kill=setTimeout(()=>ac.abort(),limit*1000);
+  try{ const r=await fetch(localStorage.aiUrl,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}), res=await r.json().catch(()=>({}));
     if(r.status===401) throw new Error('암호가 달라요. ⚙︎에서 «AI 암호»를 다시 넣어 주세요');   // v3.10 숫자(401) 대신 할 일을 알려 준다
-    if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:'')); }   // v3.7.4 413 등도 이유를 보이게
-  catch(e){ status('🔍 AI 확인 실패 — '+(e.name==='AbortError'?'50초 안에 답이 없음':e.message)); return; }
-  finally{ clearInterval(tick); clearTimeout(kill); S.aiBusy=false; }
-  status(`🔍 답 받음 ${Math.round((Date.now()-t0)/1000)}초`);
+    if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:''));                          // v3.7.4 413 등도 이유를 보이게
+    return {...snap,res,k,c,W,H,sec:Math.round((Date.now()-t0)/1000),byKey:new Map(cands.map(x=>[x.key,x])),byName:new Map(cands.map(x=>[x.name,x]))}; }
+  catch(e){ throw new Error(e.name==='AbortError'?`${limit}초 안에 답이 없음`:e.message); }
+  finally{ clearInterval(tick); clearTimeout(kill); }
+}
+function wideCands(have){ // v3.11 화면 바로 밖(좌우 30°)의 높은 건물 — 나침반이 20° 넘게 틀리면 정작 보이는 건물이 «화면 안 후보»에 없다. AI가 알아볼 표지를 더 건넨다
+  const B=camBasis(); if(!B) return []; const W=VIEW.W, hd=headingOf(B.v), half=Math.atan(W/2/VIEW.f)/D2R, out=[];
+  for(const b of S.blds){ if(b.h<80||b.d<400) continue; const da=Math.abs(wrap(b.az-hd)); if(da<half-2||da>half+30) continue;
+    const top=elev(b.ground+b.h-S.eye,b.d); if(top<0.3) continue;                 // 꼭대기가 지평선 위로 솟아야 눈에 띈다
+    const p=project(B,b.az,top); if(!p||(p[0]>=0&&p[0]<=W)) continue;
+    const name=labelOf(b); if(!name) continue; const grp=name.replace(/\s*(\d+|[A-Z])동?$/,'')||name; if(have.has(grp)) continue;
+    have.add(grp); const lv=parseInt(b.t['building:levels']); out.push({key:grp,name:grp,x:p[0],y:p[1]+6,sub:`${(b.d/1000).toFixed(1)} km`+(lv?` · ${lv}층`:''),top}); }
+  return out.sort((a,b)=>b.top-a.top).slice(0,6);
+}
+async function aiCheck(){
+  if(!localStorage.aiUrl) return;
+  if(S.aiBusy){ status('🔍 잠깐만요 — 먼저 보낸 사진의 답을 기다리는 중'); return; }
+  S.aiBusy=true; status('🔍 AI에게 묻는 중…'); let a;
+  try{ a=await aiAsk(s=>status(`🔍 AI에게 묻는 중… ${s}초`),50); }   // 50초 넘으면 포기(Worker 는 15+25초 안에 끝냄)
+  catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
+  finally{ S.aiBusy=false; }
+  const {res,k,c,W,H,byKey,byName}=a;
+  status(`🔍 답 받음 ${a.sec}초`);
   if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
-  const byKey=new Map(cands.map(x=>[x.key,x])), byName=new Map(cands.map(x=>[x.name,x]));
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);
     return x==null?null:{x:x/k,y:y/k,name:r.name||cd.name,sub:(cd.sub||'')+(r.conf!=null?` · ${Math.round(r.conf*100)}%`:''),key:'ai'+(r.key||r.name),peak:false}; }).filter(Boolean);
-  // v3.9 자동 보정 — AI가 찍은 실제 위치와 지도로 계산한 위치의 각도 차이(중앙값)만큼 나침반을 돌린다
-  const fix=aiFix(res.labels||[],byKey,byName,k); if(fix) status(fix);
+  // v3.9 자동 보정 — AI가 찍은 실제 위치와 지도로 계산한 위치의 각도 차이만큼 나침반을 돌린다
+  const fix=aiFix(a); if(fix) status(fix);
   // 멈춘 사진 위에 이름표 — 톡 하면 닫힘
   const view=document.createElement('canvas'), dpr=devicePixelRatio||1; view.width=W*dpr; view.height=H*dpr; view.id='aiView';
   Object.assign(view.style,{position:'fixed',inset:'0',width:W+'px',height:H+'px',zIndex:50,background:'#000'});
@@ -557,16 +578,51 @@ async function aiCheck(){
   view.onclick=()=>view.remove(); document.body.appendChild(view); status(`🔍 AI 확인 ${L.length}개`+(fix?` · ${fix}`:'')+(res.how?` · ${res.how.replace(/gemini-/g,'')}`:''));
 }
 $('ai').onclick=aiCheck;
-function aiFix(labels,byKey,byName,k){
-  const cx=VIEW.W/2, ang=x=>Math.atan((x-cx)/VIEW.f)/D2R, D=[];
-  for(const r of labels){ const cd=byKey.get(r.key)||byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<0.6) continue;
+function aiFix(q,auto){
+  if(S.ep!==q.ep||S.userOff!==q.off0) return null;   // v3.11 기다리는 사이 센서가 끊겼거나(자이로 기준이 바뀜) 손으로 맞췄다 → 손으로 맞춘 쪽을 따른다
+  const {k,byKey,byName}=q, cx=q.W/2, ang=x=>Math.atan((x-cx)/q.f)/D2R, D=[];   // 사진 찍은 순간의 화면 폭·초점거리로 잰다(그사이 폰을 돌려 세웠어도)
+  for(const r of q.res.labels||[]){ const cd=byKey.get(r.key)||byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<(auto?0.7:0.6)) continue;
     const d=ang(r.x/k)-ang(cd.x/k); if(Math.abs(d)<45) D.push(d); }
   if(!D.length) return null;
   // v3.10 가운데값에서 4° 안에 드는 건물이 과반(둘 이상)이면 그 평균으로 맞춘다 — 예전 «최대−최소 6° 이내»는 한 동만 옆 동으로 잘못 짚혀도 포기했다(11-15 사진: 16~22°, 폭 5.6°로 아슬아슬)
   D.sort((a,b)=>a-b); const med=D.length%2?D[D.length>>1]:(D[D.length/2-1]+D[D.length/2])/2;
   const In=D.filter(d=>Math.abs(d-med)<=4), m=In.reduce((a,b)=>a+b,0)/In.length;
+  if(auto&&In.length<2) return null;                                   // 저절로 맞출 때는 건물 하나만 보고는 움직이지 않는다
   if(D.length>=2&&In.length<Math.max(2,Math.ceil(D.length*0.6))) return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${(D[D.length-1]-D[0]).toFixed(0)}°)`;
-  if(Math.abs(m)<0.7){ calibrated(); return `🧭 방향 정확(${fmtD(m)})`; }
+  S.userOff+=wrap((S.alphaOff??0)-(q.aOff0??0));   // v3.11 답을 기다리는 동안 나침반이 움직인 만큼은 되돌린다 — 사진을 찍은 순간을 기준으로 맞춘다
+  if(Math.abs(m)<0.7){ calibrated(); return auto?'🧭 방향 확인 — 정확해요':`🧭 방향 정확(${fmtD(m)})`; }
   S.userOff-=m; calibrated();
-  return `🧭 자동 보정 ${fmtD(-m)} (건물 ${In.length}개 기준)`;
+  return auto?`🧭 방향을 자동으로 맞췄어요 (${fmtD(-m)} · 건물 ${In.length}개)`:`🧭 자동 보정 ${fmtD(-m)} (건물 ${In.length}개 기준)`;
+}
+
+/* ---------- v3.11 켤 때 방향 자동 맞춤 — 🔍를 누르지 않아도 처음에 AI에게 한 번 물어 나침반 오차를 잡는다 ----------
+   AI 주소가 있고 ⚙︎ «켤 때 방향 자동 맞춤»이 켜져 있을 때만(시작 화면에 «사진을 보낸다»고 적는다). 화면은 멈추지 않는다.
+   · 폰이 1초쯤 가만히 지평선 근처를 보고, 건물 후보가 둘 이상일 때 묻는다.
+   · 건물 둘 이상이 같은 만큼 어긋나 있어야만 맞춘다(하나만 보고는 움직이지 않는다).
+   · 못 맞추면 다른 쪽을 볼 때 두 번까지 더 해 보고 그만둔다(한 번 켤 때 최대 3장). 손으로 끌어 맞췄으면 하지 않는다. */
+const AUTO={n:0,last:0,hdg:0,done:false,st:[],t0:0,err:false};
+const autoOn=()=>!!localStorage.aiUrl&&localStorage.autoCal!=='0';
+function autoTick(){
+  if(AUTO.done||S.aiBusy||drag||!autoOn()||$('hud').hidden||document.hidden) return;
+  if(S.hold||AUTO.n>=3){ AUTO.done=true; return; }                       // 이미 맞췄거나(끌기·🔍) 세 번 해 봤다
+  const B=camBasis(); if(!B||!S.M||S.cmpOff==null||!$('cam').videoWidth||!S.blds.length){ AUTO.st.length=0; return; }
+  const h=headingOf(B.v), p=Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R, now=Date.now();
+  AUTO.st.push([h,p]); if(AUTO.st.length>3) AUTO.st.shift();
+  if(AUTO.st.length<3||AUTO.st.some(s=>Math.abs(wrap(s[0]-h))>2.5||Math.abs(s[1]-p)>2.5)||p<-20||p>35) return;   // 1초쯤 가만히, 땅·하늘만 보고 있지 않을 때
+  if(S.labels.filter(l=>!l.peak).length+S.dots.length<2) return;         // 건물 후보가 둘은 있어야 한다
+  AUTO.t0=AUTO.t0||now; if((kq.length||kBusy)&&now-AUTO.t0<6000) return;  // 건물 이름(카카오)을 받는 중이면 6초까지 기다린다
+  if(AUTO.n&&(AUTO.err?now-AUTO.last<5000:(now-AUTO.last<12000||(Math.abs(wrap(h-AUTO.hdg))<15&&now-AUTO.last<40000)))) return;   // 다시 물을 때: AI 서버가 바빴으면 5초 뒤, 건물을 못 알아봤으면 12초 뒤 다른 쪽(15°)을 볼 때나 40초 뒤
+  autoCal(h);
+}
+async function autoCal(h){
+  S.aiBusy=true; AUTO.n++; AUTO.last=Date.now(); AUTO.hdg=h; AUTO.err=false; const off0=S.userOff, giveUp='🧭 방향 자동 맞춤을 못 했어요 — 화면을 좌우로 끌어 맞추세요', busy='🧭 방향 자동 맞춤: AI가 바빠요 — 잠시 뒤 다시 해 봅니다';
+  status('🧭 방향을 자동으로 맞추는 중…'); let a;
+  try{ a=await aiAsk(s=>{ if(!S.hold&&!drag) status(`🧭 방향을 자동으로 맞추는 중… ${s}초`); },45); }   // Worker 가 예비 모델까지 가면 15+25초
+  catch(e){ if(/암호/.test(e.message)){ AUTO.done=true; status('🧭 방향 자동 맞춤 못 함 — '+e.message); } else { AUTO.err=true; status(AUTO.n>=3?giveUp:busy); } return; }
+  finally{ S.aiBusy=false; AUTO.last=Date.now(); }
+  if(S.hold||drag||S.userOff!==off0){ AUTO.done=true; return; }         // 기다리는 사이 손으로 맞췄다 → 그쪽을 따른다
+  if(a.res.error&&!(a.res.labels||[]).length){ AUTO.err=true; status(AUTO.n>=3?giveUp:busy); return; }   // Worker 가 «Gemini 붐빔·너무 늦음»을 알려 왔다
+  const fix=aiFix(a,true);
+  if(S.hold){ AUTO.done=true; status(fix); }
+  else status(AUTO.n>=3?giveUp:'🧭 방향 자동 맞춤: 건물을 확실히 못 알아봤어요 — 트인 쪽을 비추면 다시 해 봅니다');
 }
