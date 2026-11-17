@@ -1,6 +1,7 @@
 // 저게뭐야 «찍고 확인»·«찰칵 → 드라이브» 중계 Worker — Cloudflare 편집기에 통째로 붙여 넣는다. 설명은 AI_HANDOFF.md 4절
 const ALLOWED_ORIGIN = "https://taehunha-gmail.github.io";
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB
+const MODEL_RE = /^gemini-[a-z0-9.\-]{1,40}$/i;   // 점검·시험 때 넘겨받는 모델 이름은 이 꼴만
 
 export default {
   async fetch(request, env) {
@@ -44,7 +45,7 @@ export default {
     if (!env.GEMINI_MODEL) return reply({ labels: [], error: "GEMINI_MODEL 미설정 — AI Studio 에서 보이는 최신 Flash 이름을 넣으세요" });
     if (!env.GEMINI_API_KEY) return reply({ labels: [], error: "GEMINI_API_KEY 미설정" });
 
-    // ★7 점검: {"diag":true} 를 보내면 사진 없이 두 모델에 짧게 물어 상태·걸린 시간만 알려 준다
+    // ★7 점검: {"diag":true} 를 보내면 사진 없이 두 모델에 짧게 물어 상태·걸린 시간만 알려 준다. {"diag":true,"models":[…]} 면 그 모델들을(예비 모델 고르기)
     const callG = async (model, body, ms) => { const t0 = Date.now();
       try { const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
           { method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body), signal: AbortSignal.timeout(ms) });
@@ -54,7 +55,8 @@ export default {
       } catch (e) { return { ok: false, model, ms: Date.now() - t0, status: "timeout", msg: String(e).slice(0, 80) }; } };
     if (p.diag) {
       const q = { contents: [{ role: "user", parts: [{ text: "ok 라고만 답해" }] }], generationConfig: { thinkingConfig: { thinkingLevel: "low" } } };
-      const res = await Promise.all([env.GEMINI_MODEL, env.GEMINI_FALLBACK].filter(Boolean).map(m => callG(m, q, 25000)));
+      const list = Array.isArray(p.models) && p.models.length ? p.models.filter(m => MODEL_RE.test(String(m))).slice(0, 6) : [env.GEMINI_MODEL, env.GEMINI_FALLBACK].filter(Boolean);
+      const res = await Promise.all(list.map(m => callG(m, q, 25000)));
       return reply({ diag: res.map(({ g, ...x }) => x) });
     }
 
@@ -68,7 +70,7 @@ export default {
       y: typeof c.y === "number" ? Math.round(c.y / h * 1000) : undefined }));
 
     // ★2 지시문 좌표 표현을 0~1000 으로 통일(원래 «픽셀»과 섞여 있었음)
-    const prompt = `사진은 서울에서 폰 카메라로 찍은 풍경이다. 아래 후보는 GPS·나침반·지도로 계산한 «화면 안에 있을 수 있는 건물» 목록이고, x·y는 계산상 사진 속 위치다(0~1000 정규화, 오차 있음). 사진에 실제로 보이는 후보만 골라라. 가려졌거나 안 보이면 빼라. 보이는 것은 사진 속 실제 위치를 box_2d [ymin, xmin, ymax, xmax](0~1000)로 적어라. 후보에 없는 건물은 지어내지 마라. 확신도 conf(0~1)를 붙여라. 같은 단지의 비슷한 동처럼 구별이 안 되면 단지 이름 하나만 남겨라. 출력은 JSON 하나만: {"labels":[{"key":…,"name":…,"box_2d":[ymin,xmin,ymax,xmax],"conf":…}]}
+    const prompt = `사진은 서울에서 폰 카메라로 찍은 풍경이다. 아래 후보는 GPS·나침반·지도로 계산한 «화면 안에 있을 수 있는 건물» 목록이고, x·y는 계산상 사진 속 위치다(0~1000 정규화, 오차 있음). 먼저 사진 전체를 보고 view 를 정하라: 바깥 풍경(건물·하늘·먼 경치)이 보이면 "open", 실내 벽·천장·가구·사람·바로 앞 물건만 보이거나 창이 막혀 바깥이 거의 안 보이면 "blocked", 너무 어둡거나 흔들려 무엇인지 알아볼 수 없으면 "dark". 그다음 사진에 실제로 보이는 후보만 골라라. 가려졌거나 안 보이면 빼라. 보이는 것은 사진 속 실제 위치를 box_2d [ymin, xmin, ymax, xmax](0~1000)로 적어라. 후보에 없는 건물은 지어내지 마라. 확신도 conf(0~1)를 붙여라. 같은 단지의 비슷한 동처럼 구별이 안 되면 단지 이름 하나만 남겨라. 출력은 JSON 하나만: {"view":"open|blocked|dark","labels":[{"key":…,"name":…,"box_2d":[ymin,xmin,ymax,xmax],"conf":…}]}
 
 [후보 건물 목록]
 ${JSON.stringify(cands)}`;
@@ -76,10 +78,12 @@ ${JSON.stringify(cands)}`;
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
                    generationConfig: { response_mime_type: "application/json", thinkingConfig: { thinkingLevel: "low" } } };   // ★6 생각은 짧게 — 오래 생각하면 수십 초
     try {
-      // ★3 키는 헤더로. ★5 붐비면(503·429·500) 또는 늦으면 → 예비 모델(GEMINI_FALLBACK)로 바로 넘어간다(기다리며 같은 모델 재시도 안 함)
-      const t0 = Date.now(), tries = [];
-      let R = await callG(env.GEMINI_MODEL, body, 15000); tries.push(R);
-      if (!R.ok && env.GEMINI_FALLBACK && [429, 500, 503, "timeout"].includes(R.status)) { R = await callG(env.GEMINI_FALLBACK, body, 25000); tries.push(R); }
+      // ★3 키는 헤더로. ★9 붐비면(503·429·500, 대개 잠깐) 1.2초 쉬고 같은 모델로 한 번 더(11-17 저녁 내내 503) → ★5 그래도 안 되거나 늦으면 예비 모델(GEMINI_FALLBACK)
+      const t0 = Date.now(), tries = [], first = typeof p.model === "string" && MODEL_RE.test(p.model) ? p.model : env.GEMINI_MODEL;   // p.model = 시험용(앱은 안 보냄)
+      const busy = R => [429, 500, 503].includes(R.status);
+      let R = await callG(first, body, 14000); tries.push(R);
+      if (!R.ok && busy(R) && R.ms < 6000) { await new Promise(z => setTimeout(z, 1200)); R = await callG(first, body, 14000); tries.push(R); }
+      if (!R.ok && env.GEMINI_FALLBACK && env.GEMINI_FALLBACK !== first && (busy(R) || R.status === "timeout")) { R = await callG(env.GEMINI_FALLBACK, body, 20000); tries.push(R); }
       const how = tries.map(x => `${x.model} ${x.ok ? "OK" : x.status} ${(x.ms / 1000).toFixed(1)}초`).join(" → ");
       // ★4 실패 이유를 앱에 돌려준다
       if (!R.ok) { const hint = R.status === 503 ? "Gemini 가 붐빔" : R.status === 429 ? "사용 한도 초과" : R.status === "timeout" ? "너무 늦음" : "";
@@ -93,7 +97,8 @@ ${JSON.stringify(cands)}`;
         if (Array.isArray(it.box_2d) && it.box_2d.length === 4) { const [ymin, xmin, , xmax] = it.box_2d;
           o.x = Math.round((xmin + xmax) / 2 / 1000 * w); o.y = Math.round(ymin / 1000 * h); }
         return o; });
-      return reply({ labels, how, ms: Date.now() - t0 });
+      const view = ["open", "blocked", "dark"].includes(parsed?.view) ? parsed.view : undefined;   // ★10 바깥이 보이나 — 앱은 «blocked» 면 그 방향 이름표를 치운다
+      return reply({ labels, view, how, ms: Date.now() - t0 });
     } catch (e) { return reply({ labels: [], error: "중계 오류: " + String(e).slice(0, 120) }); }
   },
 };
