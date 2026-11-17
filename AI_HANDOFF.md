@@ -62,7 +62,8 @@ OSM 원본 타일을 만든 `tiles.py` 는 남아 있지 않다. 다시 만들�
 - Worker 는 Apps Script 의 «POST → 302 → GET» 을 따라가 JSON `{ok,id,name}` 을 받는다(시험: 진짜 HTTP 서버로 확인). 로그인 화면이 오면 «액세스를 모든 사용자로» 라고 알려 준다.
 - 앱은 켤 때 암호 확인(`POST {}`) 답의 `drive:true` 를 보고 ⚙︎ 줄을 보인다(`localStorage.drive`).
 - 드라이브로 가는 사진에만 **진단 기록**을 JPEG 설명 칸(COM)에 넣는다: 판·시각·위도경도·정확도·층·눈높이·방향·기울기·보정값·붙들기·나침반 자체 오차·자동 맞춤 상태·화면 회전·화각·화면 크기·초점거리·간단/전부·알림·이름표 자리(최대 40개). 공유 창으로 내보내는 사진에는 넣지 않는다(위치가 남에게 가지 않게). 읽기: `json.loads(Image.open(f).info['comment'])`.
-- 설정(사용자가 한 번): ① 드라이브 계정(돕세)으로 script.google.com → 새 프로젝트 → `tool/drive_save.gs` 붙여 넣기 → 저장 ② 배포 → 새 배포 → 웹 앱 · 실행 «나» · 액세스 «모든 사용자» → 권한 허용 → 웹 앱 URL 복사 ③ Cloudflare Worker → Settings → Variables and Secrets → Secret `DRIVE_URL` ④ Worker 코드 새로 붙여 넣기 → Deploy. 회사 계정 정책으로 «모든 사용자»가 없으면 이 길은 막힌다 — 그때는 Cloudflare 저장소(KV)에 두고 세션이 Worker 로 직접 읽는 길이 있다.
+- 어느 구글 계정이든 된다. 다만 세션의 드라이브 도구는 **돕세 계정**에 연결돼 있다 — 개인 계정으로 하면 개인 드라이브에 «저게뭐야 사진» 폴더를 먼저 만들어(이름 그대로, 스크립트가 이름으로 찾는다) 돕세 계정에 공유(뷰어)해야 세션이 본다(`sharedWithMe` 또는 제목으로 검색). 개인 계정은 회사 정책으로 «모든 사용자»가 막힐 걱정이 없다.
+- 설정(사용자가 한 번): ① 쓸 구글 계정으로 script.google.com → 새 프로젝트 → `tool/drive_save.gs` 붙여 넣기 → 저장 ② 배포 → 새 배포 → 웹 앱 · 실행 «나» · 액세스 «모든 사용자» → 권한 허용 → 웹 앱 URL 복사 ③ Cloudflare Worker → Settings → Variables and Secrets → Secret `DRIVE_URL` ④ Worker 코드 새로 붙여 넣기 → Deploy. 회사 계정 정책으로 «모든 사용자»가 없으면 이 길은 막힌다 — 그때는 Cloudflare 저장소(KV)에 두고 세션이 Worker 로 직접 읽는 길이 있다.
 
 ## 5. 지금 상태
 - 완료: 실시간 이름표, 서울 층수·높이 보강, 화각 버그, 아이폰 그리기 버그, 🔍 3.6 Flash, 자동 보정, 가로 센서 버그(v3.10), 끌어서 맞추기·붙들기(v3.10), 이름표 겹침·잘림(v3.10), 켤 때 방향 자동 맞춤(v3.11).
