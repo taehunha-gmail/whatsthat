@@ -10,7 +10,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-180.png">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 <video id="cam" playsinline muted autoplay></video>
@@ -54,6 +54,7 @@
   <label>AI 확인 주소 <input id="aiUrl" type="url" placeholder="비워 두면 꺼짐" style="width:12em"></label>
   <label>AI 암호 <input id="aiToken" type="text" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="Worker APP_TOKEN" style="width:9em"> <span id="aiOk"></span></label>
   <label id="autoCalRow"><input id="autoCal" type="checkbox" checked> 켤 때 방향 자동 맞춤 <span style="opacity:.7;font-size:12px">(사진을 AI로 보냄)</span></label>
+  <label id="aiVisRow"><input id="aiVis" type="checkbox" checked> 눈에 보이는 건물만 <span style="opacity:.7;font-size:12px">(멈출 때 사진을 AI로 보냄)</span></label>
   <label id="driveRow" hidden><input id="driveSave" type="checkbox" checked> 찰칵 사진 드라이브에 저장 <span style="opacity:.7;font-size:12px">(«저게뭐야 사진» 폴더)</span></label>
   <button id="reload">주변 건물 다시 불러오기</button>
   <button id="setDone">닫기</button>
@@ -61,6 +62,6 @@
 
 <div id="err" hidden></div>
 <button id="sensor" hidden>🧭 방향 센서 켜기</button>
-<script src="app.js?v=25"></script>
+<script src="app.js?v=26"></script>
 </body>
 </html>

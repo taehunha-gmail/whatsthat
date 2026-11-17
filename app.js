@@ -1,7 +1,7 @@
 'use strict';
-/* 저게뭐야? v3.13 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.14 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
-const VER='3.13';
+const VER='3.14';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -234,23 +234,27 @@ function compute(){
     cnt.set(k,(cnt.get(k)||0)+1); (sx.get(k)||sx.set(k,[]).get(k)).push(x); if(!top.has(k)||y<top.get(k)) top.set(k,y);}
   const vis=[...cnt.entries()].filter(([k,n])=>n>=3).sort((a,b)=>b[1]-a[1]);   // 새로 뜨려면 6칸, 떠 있던 것은 3칸까지 봐준다(아래) — 멀고 가는 탑(롯데타워)이 손떨림에 깜빡이지 않게(v3.10)
   // v3.5 간단 모드 — 같은 단지는 한 이름표, 기본 5개(고층·가운데 우선)·나머지는 점(톡 누르면 이름)
-  const cand=new Map();
+  const cand=new Map(), visHide=visOn(), visDim=visHide&&!(VIS.down>Date.now());   // v3.14 눈에 보이는 건물만(AI 확인)
   for(const [k,n] of vis){
     const b=shapes.get(k); if(b.d<40) continue;
     const name=labelOf(b); if(!name) continue;
     const grp=name.replace(/\s*(\d+|[A-Z])동?$/,'')||name;   // «서울숲한신더휴 101동»·«아크로서울포레스트 B» → 단지 이름
     if(n<6&&!S.shown.has(grp)) continue;
+    const vv=visHide?VIS.m.get(grp):null; if(vv&&vv.s==='hidden') continue;   // AI가 «안 보임»이라 한 건물은 이 자리에서는 빼 둔다
     const c=cand.get(grp); if(c){ c.n++; c.area=Math.max(c.area,n); c.h=Math.max(c.h,b.h); continue; }
     const xs=sx.get(k).sort((a,b)=>a-b); const x=xs[xs.length>>1]/sc, y=top.get(k)/sc+6;
     const lv=parseInt(b.t['building:levels']);
-    cand.set(grp,{grp,name,x,y,area:n,n:1,h:b.h,d:b.d,lv});
+    cand.set(grp,{grp,name,x,y,area:n,n:1,h:b.h,d:b.d,lv,vv});
   }
   const cx=VIEW.W/2;
   const C=[...cand.values()].map(c=>{
+    const ok=c.vv&&c.vv.s==='seen';
+    if(ok){ const f=VIEW.f, hy=VIEW.H/2, r=visR(c.vv); c.x=cx+f*Math.tan(Math.atan((c.x-cx)/f)+r*D2R); c.y=hy-f*Math.tan(Math.atan((hy-c.y)/f)+c.vv.re*D2R); }   // AI가 본 자리로(지도와 어긋난 만큼 — 방향 오차·GPS 오차·높이 자료 오차)
     const center=1+1.5*Math.max(0,1-Math.abs(c.x-cx)/cx);
-    c.score=Math.log2(1+c.area)*(1+c.h/40)*(c.d<300?0.3:1)*center*(S.shown.has(c.grp)?1.3:1);   // 1.3 = 깜빡임 방지
+    c.score=Math.log2(1+c.area)*(1+c.h/40)*(c.d<300?0.3:1)*center*(S.shown.has(c.grp)?1.3:1)*(ok?1.5:1);   // 1.3 = 깜빡임 방지 · 1.5 = AI가 확인한 건물 먼저
     c.name=c.grp;   // v3.7.2 동 번호는 빼고 단지 이름만(«101동»은 눈으로 보면 된다)
-    c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')));
+    c.sub=`${(c.d/1000).toFixed(1)} km`+(c.n>1?` · ${c.n}개 동`:(c.lv?` · ${c.lv}층`:(c.h>=60?` · ${Math.round(c.h)} m`:'')))+(ok?' ✓':'');
+    c.dim=visDim&&!c.vv;   // 아직 AI가 보지 않은 건물은 흐리게
     return c;}).sort((a,b)=>b.score-a.score);
   // v3.10 한 덩어리로 보이는 것은 이름표 하나 — 화면에서 28 px 안에 붙어 있고 거리도 비슷하면(±25%) 센 쪽만 남기고 나머지는 점으로.
   //  (11-15 사진: 갤러리아 포레 한 단지에 «한화 갤러리아 포레스트 타워»·«더서울라이티움» 이름표가 겹쳐 쌓였다.) 이미 떠 있던 것은 16 px 까지 봐준다(깜빡임 방지)
@@ -264,15 +268,15 @@ function compute(){
   const now=Date.now(); S.stick=S.stick||new Map();
   const byKey=new Map(C.map(c=>[c.grp,c])), chosen=[], grace=[];
   for(const [k,st] of S.stick){ const c=byKey.get(k);
-    if(c){ st.seen=now; st.lab={x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:k}; chosen.push(c); }
+    if(c){ st.seen=now; st.lab={x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:k,dim:c.dim}; chosen.push(c); }
     else if(now-st.seen<800) grace.push(st.lab); else S.stick.delete(k); }
   chosen.sort((a,b)=>b.score-a.score); chosen.splice(Math.max(0,cap-grace.length));
   for(const c of C){ if(chosen.includes(c)) continue;
     if(chosen.length+grace.length<cap||(popOn&&S.pop.key===c.grp)){ chosen.push(c); continue; }
     let wi=-1,ws=1e9; chosen.forEach((x,i)=>{const st=S.stick.get(x.grp); if(st&&now-st.t0>2000&&x.score<ws){ws=x.score;wi=i;}});
     if(wi>=0&&c.score>2*ws){ S.stick.delete(chosen[wi].grp); chosen[wi]=c; } }
-  for(const c of chosen) if(!S.stick.has(c.grp)) S.stick.set(c.grp,{t0:now,seen:now,lab:{x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}});   // v3.10 lab 을 비워 두면 바로 다음 계산에서 빠질 때 null 이 이름표 목록에 섞여 계산이 멈췄다
-  const L=chosen.map(c=>({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp})).concat(grace.filter(Boolean)), dots=[];
+  for(const c of chosen) if(!S.stick.has(c.grp)) S.stick.set(c.grp,{t0:now,seen:now,lab:{x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp,dim:c.dim}});   // v3.10 lab 을 비워 두면 바로 다음 계산에서 빠질 때 null 이 이름표 목록에 섞여 계산이 멈췄다
+  const L=chosen.map(c=>({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp,dim:c.dim})).concat(grace.filter(Boolean)), dots=[];
   for(const c of DUP){ if(popOn&&S.pop.key===c.grp&&!L.some(l=>l.key===c.grp)) L.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 겹쳐서 점이 된 것도 톡 하면 이름이 뜬다
   for(const c of C.concat(DUP)){ if(dots.length>=12) break; if(!L.some(l=>l.key===c.grp)) dots.push({x:c.x,y:c.y,name:c.name,sub:c.sub,peak:false,key:c.grp}); }   // 점도 다음 12개까지만
   if(S.showPeaks){ const P=[], seen=new Set();
@@ -352,7 +356,8 @@ function frame1(){
   const live=new Set();
   for(const l of S.labels){ live.add(l.key); let d=DISP.get(l.key);
     if(!d){ d={...l,a:0}; DISP.set(l.key,d); }
-    d.x+=(l.x-d.x)*0.3; d.y+=(l.y-d.y)*0.3; d.name=l.name; d.sub=l.sub; d.peak=l.peak; d.a=Math.min(1,d.a+0.12); }
+    d.x+=(l.x-d.x)*0.3; d.y+=(l.y-d.y)*0.3; d.name=l.name; d.sub=l.sub; d.peak=l.peak;
+    const ta=l.dim?0.45:1; d.a=d.a<ta?Math.min(ta,d.a+0.12):Math.max(ta,d.a-0.06); }   // v3.14 확인 전 = 흐리게(0.45)
   for(const [k,d] of DISP) if(!live.has(k)){ d.a-=0.08; if(d.a<=0){ DISP.delete(k); S.lift&&S.lift.delete(k); } }
   const now=performance.now(); if(!S.avoid||now-S.avoidT>400){ S.avoidT=now;   // 위쪽 알림 줄과 아래 단추는 피해서 놓는다(0.4초마다 자리 확인)
     S.avoid=[$('status'),...document.querySelectorAll('#bar button:not([hidden])')].map(el=>el.getBoundingClientRect()).filter(r=>r.width).map(r=>[r.left-4,r.top-4,r.right+4,r.bottom+4]); }
@@ -429,10 +434,10 @@ async function start(){
   $('cam').addEventListener('loadedmetadata',updateView); $('cam').addEventListener('resize',updateView); addEventListener('resize',updateView); updateView();   // v3.8.1 영상 크기가 바뀔 때도(폰을 돌린 뒤 늦게 바뀜)
   navigator.geolocation.watchPosition(p=>{
     S.lat=p.coords.latitude; S.lon=p.coords.longitude; S.acc=p.coords.accuracy;
-    placeCheck();
+    placeCheck(); visPlace();
     if(!S.loadedAt||bd(S.loadedAt[0],S.loadedAt[1],S.lat,S.lon)[1]>400) loadArea();
   },e=>status('위치 권한이 필요합니다'),{enableHighAccuracy:true,maximumAge:5000});
-  initKakao(); setInterval(compute,180); setInterval(autoTick,500); frame(); if(localStorage.aiUrl) aiPing();   // v3.12 켤 때 암호·드라이브 저장 준비를 조용히 확인
+  initKakao(); setInterval(compute,180); setInterval(autoTick,500); setInterval(visTick,500); frame(); if(localStorage.aiUrl) aiPing();   // v3.12 켤 때 암호·드라이브 저장 준비를 조용히 확인
 }
 
 /* ---------- 찰칵 ---------- */
@@ -465,7 +470,7 @@ const driveOn=()=>!!localStorage.aiUrl&&localStorage.drive==='1'&&localStorage.d
 function shotMeta(){ const B=camBasis()||{v:[0,1,0],r:[1,0,0]}, as=x=>+(Math.asin(Math.max(-1,Math.min(1,x)))/D2R).toFixed(1);
   return {app:'저게뭐야',v:VER,t:new Date().toISOString(),lat:S.lat==null?null:+S.lat.toFixed(6),lon:S.lon==null?null:+S.lon.toFixed(6),acc:Math.round(S.acc||0),
     floor:S.floor,eye:Math.round(S.eye),hdg:+headingOf(B.v).toFixed(1),pitch:as(B.v[2]),roll:as(B.r[2]),off:+S.userOff.toFixed(2),hold:S.hold,cmpAcc:S.cmpAcc,
-    auto:{n:AUTO.n,done:AUTO.done},adj:S.adj||[],scr:scrAngle(),fov:S.fov,W:VIEW.W,H:VIEW.H,f:+(VIEW.f||0).toFixed(1),vw:VIEW.vw,vh:VIEW.vh,simple:S.simple,msg:S.msg||'',
+    auto:{n:AUTO.n,done:AUTO.done},adj:S.adj||[],vis:visSum(),scr:scrAngle(),fov:S.fov,W:VIEW.W,H:VIEW.H,f:+(VIEW.f||0).toFixed(1),vw:VIEW.vw,vh:VIEW.vh,simple:S.simple,msg:S.msg||'',
     labels:S.labels.slice(0,40).map(l=>[l.name,Math.round(l.x),Math.round(l.y)])}; }
 function jpegNote(buf,text){ // JPEG 안에 설명(COM) 칸을 끼워 넣는다 — 그림은 그대로, 사진 보기 앱에는 안 보인다
   const b=new Uint8Array(buf), t=new TextEncoder().encode(text); if(t.length>65000||b[0]!==0xFF||b[1]!==0xD8) return new Blob([b],{type:'image/jpeg'});
@@ -549,11 +554,13 @@ addEventListener('pointerup',dragEnd); addEventListener('pointercancel',dragEnd)
    받는 것(JSON):  {labels:[{key|name, x?, y?, conf?}]} ← 사진에 실제로 보이는 것만. x·y 없으면 후보 위치를 쓴다
    자세한 약속·프롬프트 = AI_HANDOFF.md */
 function aiOn(){ $('aiUrl').value=localStorage.aiUrl||''; $('aiToken').value=localStorage.aiToken||''; aiUI(); }
-function aiUI(){ const on=!!localStorage.aiUrl, auto=on&&localStorage.autoCal!=='0';   // 입력 칸은 건드리지 않는다(쓰는 중에 지워지지 않게)
-  $('ai').hidden=!on; $('autoCalRow').hidden=!on; $('autoCal').checked=localStorage.autoCal!=='0';
+function aiUI(){ const on=!!localStorage.aiUrl, auto=on&&localStorage.autoCal!=='0', vis=on&&localStorage.aiVis!=='0';   // 입력 칸은 건드리지 않는다(쓰는 중에 지워지지 않게)
+  $('ai').hidden=!on; $('autoCalRow').hidden=!on; $('autoCal').checked=localStorage.autoCal!=='0'; $('aiVisRow').hidden=!on; $('aiVis').checked=localStorage.aiVis!=='0';
   $('driveRow').hidden=!(on&&localStorage.drive==='1'); $('driveSave').checked=localStorage.driveSave!=='0';
-  $('privacy').textContent=(!on?'사진은 폰 밖으로 나가지 않습니다.':auto?'켤 때(방향 맞춤, 최대 3장)와 🔍를 누를 때 사진을 AI로 보냅니다.':'🔍를 누를 때만 사진을 AI로 보냅니다.')   // v3.7.4 · v3.11 보내는 때를 있는 그대로 적는다
+  const when=[auto&&(vis?'켤 때(방향 맞춤)':'켤 때(방향 맞춤, 최대 3장)'),vis&&'멈춰서 볼 때(보이는 건물 확인)'].filter(Boolean);   // v3.7.4 · v3.11 · v3.14 보내는 때를 있는 그대로 적는다
+  $('privacy').textContent=(!on?'사진은 폰 밖으로 나가지 않습니다.':when.length?when.join('·')+'·🔍를 누를 때 사진을 AI로 보냅니다.':'🔍를 누를 때만 사진을 AI로 보냅니다.')
     +(driveOn()?' 찰칵 사진은 내 구글 드라이브에 저장합니다.':''); }
+$('aiVis').onchange=e=>{ localStorage.aiVis=e.target.checked?'1':'0'; aiUI(); compute(); };
 $('autoCal').onchange=e=>{ localStorage.autoCal=e.target.checked?'1':'0'; aiUI(); };
 $('driveSave').onchange=e=>{ localStorage.driveSave=e.target.checked?'1':'0'; aiUI(); };
 $('aiToken').onchange=e=>{ const v=e.target.value.trim(); if(v) localStorage.aiToken=v; else localStorage.removeItem('aiToken'); aiPing(); };
@@ -585,7 +592,7 @@ async function aiAsk(onSec,limit){
   try{ const r=await fetch(localStorage.aiUrl,{signal:ac.signal,method:'POST',headers:{'Content-Type':'application/json','X-App-Token':localStorage.aiToken||''},body:JSON.stringify(body)}), res=await r.json().catch(()=>({}));
     if(r.status===401) throw new Error('암호가 달라요. ⚙︎에서 «AI 암호»를 다시 넣어 주세요');   // v3.10 숫자(401) 대신 할 일을 알려 준다
     if(!r.ok) throw new Error(r.status+(res.error?' '+res.error:''));                          // v3.7.4 413 등도 이유를 보이게
-    return {...snap,res,k,c,W,H,sec:Math.round((Date.now()-t0)/1000),byKey:new Map(cands.map(x=>[x.key,x])),byName:new Map(cands.map(x=>[x.name,x]))}; }
+    return {...snap,res,k,c,W,H,cands,sec:Math.round((Date.now()-t0)/1000),byKey:new Map(cands.map(x=>[x.key,x])),byName:new Map(cands.map(x=>[x.name,x]))}; }
   catch(e){ throw new Error(e.name==='AbortError'?`${limit}초 안에 답이 없음`:e.message); }
   finally{ clearInterval(tick); clearTimeout(kill); }
 }
@@ -606,7 +613,7 @@ async function aiCheck(){
   catch(e){ status('🔍 AI 확인 실패 — '+e.message); return; }
   finally{ S.aiBusy=false; }
   const {res,k,c,W,H,byKey,byName}=a;
-  status(`🔍 답 받음 ${a.sec}초`);
+  status(`🔍 답 받음 ${a.sec}초`); if(!(res.error&&!(res.labels||[]).length)) visLearn(a);
   if(res&&res.error&&!(res.labels||[]).length){ status('🔍 AI 오류 — '+String(res.error).slice(0,80)); return; }   // v3.7.3 Worker 가 알려 준 원인을 그대로 보여 준다
   const L=(res.labels||[]).map(r=>{ const cd=byKey.get(r.key)||byName.get(r.name)||{}; const x=(r.x??cd.x), y=(r.y??cd.y);
     return x==null?null:{x:x/k,y:y/k,name:r.name||cd.name,sub:(cd.sub||'')+(r.conf!=null?` · ${Math.round(r.conf*100)}%`:''),key:'ai'+(r.key||r.name),peak:false}; }).filter(Boolean);
@@ -665,7 +672,7 @@ async function autoCal(h){
   catch(e){ if(AUTO.refine){ AUTO.refine=false; AUTO.done=true; return; }   // 다시 확인이 안 되면 첫 결과를 그대로 둔다
     if(/암호/.test(e.message)){ AUTO.done=true; status('🧭 방향 자동 맞춤 못 함 — '+e.message); } else { AUTO.err=true; status(AUTO.n>=3?giveUp:busy); } return; }
   finally{ S.aiBusy=false; AUTO.last=Date.now(); }
-  const was=AUTO.refine;
+  const was=AUTO.refine; if(!(a.res.error&&!(a.res.labels||[]).length)) visLearn(a);   // v3.14 보임/안 보임도 같이 배운다
   if((S.hold&&!was)||drag||S.userOff!==off0){ AUTO.done=true; AUTO.refine=false; return; }   // 기다리는 사이 손으로 맞췄다 → 그쪽을 따른다
   if(a.res.error&&!(a.res.labels||[]).length){ if(was){ AUTO.refine=false; AUTO.done=true; return; } AUTO.err=true; status(AUTO.n>=3?giveUp:busy); return; }   // Worker 가 «Gemini 붐빔·너무 늦음»을 알려 왔다
   S.lastFix=null; const fix=aiFix(a,true), m=S.lastFix;
@@ -674,4 +681,57 @@ async function autoCal(h){
   if(m!=null){ AUTO.done=true; AUTO.refine=false; status(was?(Math.abs(m)<0.7?'🧭 다시 확인 — 방향이 맞아요':`🧭 다시 확인 — ${fmtD(-m)} 더 맞췄어요`):fix); return; }
   if(was){ AUTO.done=true; AUTO.refine=false; status('🧭 방향을 자동으로 맞췄어요'); return; }   // 다시 확인이 애매하면 첫 결과를 그대로 둔다
   status(AUTO.n>=3?giveUp:'🧭 방향 자동 맞춤: 건물을 확실히 못 알아봤어요 — 트인 쪽을 비추면 다시 해 봅니다');
+}
+
+/* ---------- v3.14 눈에 보이는 건물만 — 폰을 멈추고 보면 AI가 후보마다 «보임/안 보임»을 가려 준다 ----------
+   지도(높이 자료)만으로는 가로수·간판·자료에 없는 건물에 가린 것까지 알 수 없다. 그래서:
+   · 확인 전 이름표는 흐리게, AI가 «보임»이라 하면 진하게(✓) + AI가 본 자리로 옮기고(지도와 어긋난 만큼, GPS·높이 자료 오차), «안 보임»이면 지운다.
+   · 판정은 이 자리(40 m 안)에서만 쓴다 — 옮기면 다시 확인. 켤 때 방향 맞춤·🔍 의 답도 같이 쓴다.
+   · 방향이 3° 넘게 틀린 사진에서는 «안 보임»을 매기지 않는다(화면 밖에 있을 뿐인 건물을 지우지 않게).
+   · 멈춘 화면에 흐린 이름표가 있을 때만 묻는다(5초 간격, 한 번 켤 때 최대 40장). AI에 두 번 연달아 못 닿으면 1분 동안은 지도만으로. */
+const VIS={at:null,m:new Map(),n:0,last:0,hdg:0,wait:0,blind:0,fail:0,down:0,st:[]}, VIS_MAX=40;
+const visF=()=>(S.userOff||0)-(S.alphaOff??0);   // 화면 방향의 기준(보정값 − 나침반 맞춤). 이게 바뀐 만큼 «AI가 본 자리»를 따라 옮긴다
+// 이름표를 지도 자리에서 얼마나 옮길지(°): 사진 찍을 때 잰 차이 d + 그 뒤 화면 방향 기준이 바뀐 만큼 — 끌기·자동 맞춤으로 방향을 고쳐도 AI가 본 실제 자리에 그대로 붙어 있다.
+//  센서 기준이 새로 잡혔으면(앱 전환 등) 옮길 값을 알 수 없으니 지도 자리 그대로(보임 판정은 유지)
+const visR=v=>v.ep===S.ep&&v.d!=null?v.d+wrap(visF()-v.F):0;
+const visOn=()=>!!localStorage.aiUrl&&localStorage.aiVis!=='0';
+function visPlace(){ if(S.lat==null) return; if(!VIS.at||bd(VIS.at[0],VIS.at[1],S.lat,S.lon)[1]>40){ VIS.at=[S.lat,S.lon]; VIS.m.clear(); } }
+function visLearn(q){ // AI 답 → 후보마다 보임/안 보임, 보이면 지도와 어긋난 만큼(건물마다, 공통 방향 오차는 뺀다)
+  visPlace(); const k=q.k, cx=q.W/2, hy=q.H/2, f=q.f, angX=x=>Math.atan((x/k-cx)/f)/D2R, angY=y=>Math.atan((hy-y/k)/f)/D2R, labs=q.res.labels||[];
+  if(!labs.length) return {seen:0,hidden:0};                              // 아무것도 못 찾았으면(어둡거나 흔들림) 판정하지 않는다
+  const got=new Map(); for(const r of labs){ const cd=q.byKey.get(r.key)||q.byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<0.6) continue; got.set(cd.key,{cd,r}); }
+  const D=[...got.values()].map(({cd,r})=>angX(r.x)-angX(cd.x)).sort((a,b)=>a-b), med=D.length?D[D.length>>1]:0;
+  const canHide=got.size>=2&&Math.abs(med)<3, w=q.W*k; let seen=0,hidden=0;
+  const F=wrap((q.off0||0)-(q.aOff0??0));
+  for(const cd of q.cands){ const g=got.get(cd.key), o=VIS.m.get(cd.key);
+    if(g){ const d=angX(g.r.x)-angX(cd.x); if(Math.abs(d-med)>6) continue;   // 혼자 크게 다르면 엉뚱한 건물을 짚은 것 — 판정 보류
+      const re=g.r.y==null?0:Math.max(-4,Math.min(4,angY(g.r.y)-angY(cd.y-6*k)));
+      VIS.m.set(cd.key,{s:'seen',d,F,ep:q.ep,re,t:Date.now()}); seen++; }
+    else if(canHide&&!cd.out&&cd.x>0.08*w&&cd.x<0.92*w&&!(o&&o.s==='seen')){ VIS.m.set(cd.key,{s:'hidden',t:Date.now()}); hidden++; }   // 화면 가장자리 후보는 빼고
+  }
+  return {seen,hidden};
+}
+function visSum(){ const se=[],hi=[]; for(const [k,v] of VIS.m){ if(v.s==='seen') se.push([k,+visR(v).toFixed(1),+v.re.toFixed(1)]); else hi.push(k); }
+  return {on:visOn(),n:VIS.n,seen:se.slice(0,30),hidden:hi.slice(0,30)}; }
+function visTick(){
+  if(!visOn()||S.aiBusy||drag||$('hud').hidden||document.hidden||!$('cam').videoWidth||!S.blds.length||!S.M) return;
+  if(autoOn()&&!AUTO.done) return;                                       // 켤 때 방향 맞춤이 먼저
+  const now=Date.now(); if(VIS.n>=VIS_MAX||VIS.down>now) return;
+  const B=camBasis(); if(!B) return; const h=headingOf(B.v), p=Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R;
+  VIS.st.push([h,p]); if(VIS.st.length>3) VIS.st.shift();
+  if(VIS.st.length<3||VIS.st.some(s=>Math.abs(wrap(s[0]-h))>2.5||Math.abs(s[1]-p)>2.5)||p<-20||p>35) return;   // 1초쯤 가만히
+  const un=S.labels.filter(l=>!l.peak&&l.dim).length; if(!un) return;    // 확인 전(흐린) 이름표가 있을 때만
+  const gap=now-VIS.last, moved=Math.abs(wrap(h-VIS.hdg))>=15;
+  if(gap<5000||(gap<VIS.wait&&!(VIS.blind&&moved))||(un<2&&gap<15000)||((kq.length||kBusy)&&gap<8000)) return;   // AI가 못 알아봤으면 20초(다른 쪽을 보면 바로), 바빴으면 6초
+  visCheck(h);
+}
+async function visCheck(h){
+  S.aiBusy=true; VIS.n++; VIS.last=Date.now(); VIS.hdg=h; status('👀 보이는 건물을 AI가 확인하는 중…'); let a;
+  const fail=msg=>{ VIS.wait=6000; VIS.blind=0; if(++VIS.fail>=2){ VIS.down=Date.now()+60000; VIS.fail=0; status('👀 AI에 닿지 않아요 — 1분 동안은 지도만으로 보여 줘요'); } else status(msg); };
+  try{ a=await aiAsk(null,45); }
+  catch(e){ if(/암호/.test(e.message)){ VIS.n=VIS_MAX; status('👀 AI 확인 못 함 — '+e.message); } else fail('👀 AI 확인 못 함 — 잠시 뒤 다시'); return; }
+  finally{ S.aiBusy=false; VIS.last=Date.now(); }
+  if(a.res.error&&!(a.res.labels||[]).length){ fail('👀 AI가 바빠요 — 잠시 뒤 다시 확인해요'); return; }
+  VIS.fail=0; const v=visLearn(a); VIS.blind=v.seen+v.hidden?0:1; VIS.wait=VIS.blind?20000:5000;
+  status(v.seen+v.hidden?`👀 AI 확인 — 보임 ${v.seen} · 안 보임 ${v.hidden}`:'👀 AI가 건물을 못 알아봤어요 — 트인 쪽을 비춰 보세요');
 }
