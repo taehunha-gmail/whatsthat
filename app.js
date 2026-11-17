@@ -1,7 +1,7 @@
 'use strict';
-/* 저게뭐야? v3.12.1 — 실시간 카메라에 보이는 건물·산 이름표
+/* 저게뭐야? v3.13 — 실시간 카메라에 보이는 건물·산 이름표
    데이터: OpenStreetMap(수도권은 정적 타일 data/, 밖은 Overpass) · 국토교통부 GIS건물통합정보(서울 층수·높이, v3.8) · AWS terrain tiles · 카카오 지도 SDK(건물명) */
-const VER='3.12.1';
+const VER='3.13';
 const KAKAO_JS='a4bfdb25e1f0c9bf07c07032b4457773';
 const DECL=-8.8;               // 서울 자편각(°, 서쪽) — iOS 나침반은 자북 기준
 const $=id=>document.getElementById(id);
@@ -396,7 +396,9 @@ function onOri(e){
   } else if(e.absolute){ S.alphaOff=0; }
 }
 // v3.10 방향을 맞춘 직후(끌기·🔍·🧭)에 부른다 — 보정값을 «지금 나침반 기준»으로 다시 적어 저장하고(장소와 함께), 붙들기를 켠다
-function calibrated(){
+function logAdj(o){ (S.adj=S.adj||[]).push({t:Math.round(performance.now()/1000),...o}); if(S.adj.length>12) S.adj.shift(); }   // v3.13 누가(자동·AI·끌기·목록·막대) 얼마나 돌렸나 — 찰칵 진단 기록에 들어간다
+function calibrated(src){
+  if(src!=='auto'&&typeof AUTO!=='undefined'){ AUTO.refine=false; AUTO.done=true; }   // 손으로(끌기·🔍·🧭) 맞추면 자동 맞춤은 거기서 끝 — 손이 이긴다
   if(S.cmpOff!=null&&S.alphaOff!=null){ S.userOff+=wrap(S.cmpOff-S.alphaOff); S.alphaOff=S.cmpOff; }   // 화면은 그대로, 숫자만 옮겨 적는다
   S.userOff=wrap(S.userOff); S.hold=S.cmpOff!=null; S.away=false;
   localStorage.hdgOff=S.userOff; if(S.lat!=null) localStorage.hdgAt=S.lat.toFixed(5)+','+S.lon.toFixed(5);
@@ -406,7 +408,7 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ S.M=nul
 function placeCheck(){ // v3.10 나침반 오차는 장소마다 다르다 → 보정한 곳에서 300 m 넘게 벗어나 있으면 보정을 쓰지 않고(0), 돌아오면 다시 쓴다
   const at=(localStorage.hdgAt||'').split(',').map(Number); if(at.length!==2||!isFinite(at[0])||!isFinite(at[1])||S.lat==null) return;
   const far=bd(at[0],at[1],S.lat,S.lon)[1]>300; if(far===!!S.away) return;
-  S.away=far; S.hold=false; S.userOff=far?0:+(localStorage.hdgOff||0); $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
+  S.away=far; S.hold=false; S.userOff=far?0:+(localStorage.hdgOff||0); logAdj({k:far?'away':'back',off:+S.userOff.toFixed(1)}); $('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°';
 }
 function err(msg){const e=$('err'); e.innerHTML=msg; e.hidden=false;}
 const INAPP=/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\/|DaumApps|GSA\//i.test(navigator.userAgent);
@@ -463,7 +465,7 @@ const driveOn=()=>!!localStorage.aiUrl&&localStorage.drive==='1'&&localStorage.d
 function shotMeta(){ const B=camBasis()||{v:[0,1,0],r:[1,0,0]}, as=x=>+(Math.asin(Math.max(-1,Math.min(1,x)))/D2R).toFixed(1);
   return {app:'저게뭐야',v:VER,t:new Date().toISOString(),lat:S.lat==null?null:+S.lat.toFixed(6),lon:S.lon==null?null:+S.lon.toFixed(6),acc:Math.round(S.acc||0),
     floor:S.floor,eye:Math.round(S.eye),hdg:+headingOf(B.v).toFixed(1),pitch:as(B.v[2]),roll:as(B.r[2]),off:+S.userOff.toFixed(2),hold:S.hold,cmpAcc:S.cmpAcc,
-    auto:{n:AUTO.n,done:AUTO.done},scr:scrAngle(),fov:S.fov,W:VIEW.W,H:VIEW.H,f:+(VIEW.f||0).toFixed(1),vw:VIEW.vw,vh:VIEW.vh,simple:S.simple,msg:S.msg||'',
+    auto:{n:AUTO.n,done:AUTO.done},adj:S.adj||[],scr:scrAngle(),fov:S.fov,W:VIEW.W,H:VIEW.H,f:+(VIEW.f||0).toFixed(1),vw:VIEW.vw,vh:VIEW.vh,simple:S.simple,msg:S.msg||'',
     labels:S.labels.slice(0,40).map(l=>[l.name,Math.round(l.x),Math.round(l.y)])}; }
 function jpegNote(buf,text){ // JPEG 안에 설명(COM) 칸을 끼워 넣는다 — 그림은 그대로, 사진 보기 앱에는 안 보인다
   const b=new Uint8Array(buf), t=new TextEncoder().encode(text); if(t.length>65000||b[0]!==0xFF||b[1]!==0xD8) return new Blob([b],{type:'image/jpeg'});
@@ -490,15 +492,15 @@ function openCalib(){
   const list=$('calibList'); list.innerHTML='';
   const cands=S.blds.filter(b=>b.t.name&&!BAD.test(b.t.name)&&b.h>=60).sort((a,b)=>b.h-a.h).slice(0,24);
   for(const b of cands){const bt=document.createElement('button'); bt.textContent=b.t.name; bt.onclick=()=>{
-      const B=camBasis(); if(!B) return; const cur=headingOf(B.v); const d=((b.az-cur+540)%360)-180; S.userOff+=d; calibrated(); status(`🧭 «${b.t.name}»에 맞췄어요`); };
+      const B=camBasis(); if(!B) return; const cur=headingOf(B.v); const d=((b.az-cur+540)%360)-180; S.userOff+=d; calibrated(); logAdj({k:'list',v:+d.toFixed(1),name:b.t.name}); status(`🧭 «${b.t.name}»에 맞췄어요`); };
     list.appendChild(bt);}
 }
 $('go').onclick=start;
 $('sensor').onclick=async()=>{ try{ const r=await DeviceOrientationEvent.requestPermission(); S.oriPerm=r; if(r==='granted'){ $('sensor').hidden=true; return; } }catch(e){ S.oriPerm='error'; }
   S.manual=true; $('sensor').hidden=true; status('센서 없이: 🧭에서 방향을 맞추세요'); }; $('shot').onclick=shot; $('calib').onclick=openCalib;
 $('calibDone').onclick=()=>{$('calibPanel').hidden=true;$('cross').hidden=true;};
-$('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°'; $('hdg').oninput=e=>{S.userOff=+e.target.value;$('hdgV').textContent=S.userOff+'°';localStorage.hdgOff=S.userOff;}; $('hdg').onchange=calibrated;
-$('calibReset').onclick=()=>{ S.userOff=0; S.hold=false; localStorage.removeItem('hdgOff'); localStorage.removeItem('hdgAt'); $('hdg').value=0; $('hdgV').textContent='0°'; status('🧭 보정을 지웠어요 — 나침반 그대로'); };
+$('hdg').value=S.userOff; $('hdgV').textContent=S.userOff.toFixed(1)+'°'; $('hdg').oninput=e=>{S.userOff=+e.target.value;$('hdgV').textContent=S.userOff+'°';localStorage.hdgOff=S.userOff;}; $('hdg').onchange=()=>{ calibrated(); logAdj({k:'slider',off:+S.userOff.toFixed(1)}); };
+$('calibReset').onclick=()=>{ logAdj({k:'reset'}); S.userOff=0; S.hold=false; localStorage.removeItem('hdgOff'); localStorage.removeItem('hdgAt'); $('hdg').value=0; $('hdgV').textContent='0°'; status('🧭 보정을 지웠어요 — 나침반 그대로'); };
 $('fov').value=S.fov; $('fovV').textContent=S.fov+'°'; $('fov').oninput=e=>{S.fov=+e.target.value;$('fovV').textContent=S.fov+'°';localStorage.fov2=S.fov;updateView();};
 $('settings').onclick=()=>{$('setPanel').hidden=false;$('calibPanel').hidden=true;$('cross').hidden=true; aiPing();};
 $('setDone').onclick=()=>{$('setPanel').hidden=true;};
@@ -537,7 +539,7 @@ addEventListener('pointermove',e=>{
   S.userOff-=d; turnLabels(d); status(`🧭 끌어서 맞추는 중 ${fmtD(wrap(S.userOff-drag.from))}`);   // 오른쪽으로 끌면 이름표가 오른쪽으로 = 방향값은 줄어든다
 });
 function dragEnd(e){ if(!drag||!e.isPrimary) return; const d=drag; drag=null; if(!d.on) return;
-  S.noClick=Date.now()+400; const t=wrap(S.userOff-d.from); calibrated(); compute(); status(`🧭 방향을 ${fmtD(t)} 맞췄어요`); }
+  S.noClick=Date.now()+400; const t=wrap(S.userOff-d.from); calibrated(); logAdj({k:'drag',v:+t.toFixed(1)}); compute(); status(`🧭 방향을 ${fmtD(t)} 맞췄어요`); }
 addEventListener('pointerup',dragEnd); addEventListener('pointercancel',dragEnd);
 
 /* ---------- v3.7 «찍고 확인»(B) 자리 — AI 판정은 앱 밖(하박사님 개인 중계 주소)이 한다 ----------
@@ -623,15 +625,17 @@ function aiFix(q,auto){
   const {k,byKey,byName}=q, cx=q.W/2, ang=x=>Math.atan((x-cx)/q.f)/D2R, D=[];   // 사진 찍은 순간의 화면 폭·초점거리로 잰다(그사이 폰을 돌려 세웠어도)
   for(const r of q.res.labels||[]){ const cd=byKey.get(r.key)||byName.get(r.name); if(!cd||r.x==null||cd.x==null||(r.conf??1)<(auto?0.7:0.6)) continue;
     const d=ang(r.x/k)-ang(cd.x/k); if(Math.abs(d)<45) D.push(d); }
-  if(!D.length) return null;
+  if(!D.length){ logAdj({k:auto?'auto':'ai',r:'none',how:q.res.how}); return null; }
   // v3.10 가운데값에서 4° 안에 드는 건물이 과반(둘 이상)이면 그 평균으로 맞춘다 — 예전 «최대−최소 6° 이내»는 한 동만 옆 동으로 잘못 짚혀도 포기했다(11-15 사진: 16~22°, 폭 5.6°로 아슬아슬)
   D.sort((a,b)=>a-b); const med=D.length%2?D[D.length>>1]:(D[D.length/2-1]+D[D.length/2])/2;
   const In=D.filter(d=>Math.abs(d-med)<=4), m=In.reduce((a,b)=>a+b,0)/In.length;
-  if(auto&&In.length<2) return null;                                   // 저절로 맞출 때는 건물 하나만 보고는 움직이지 않는다
-  if(D.length>=2&&In.length<Math.max(2,Math.ceil(D.length*0.6))) return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${(D[D.length-1]-D[0]).toFixed(0)}°)`;
+  const rec={k:auto?'auto':'ai',d:D.map(d=>+d.toFixed(1)),how:q.res.how};
+  if(auto&&In.length<2){ logAdj({...rec,r:'few'}); return null; }        // 저절로 맞출 때는 건물 하나만 보고는 움직이지 않는다
+  if(D.length>=2&&In.length<Math.max(2,Math.ceil(D.length*0.6))){ logAdj({...rec,r:'spread'}); return `🧭 자동 보정 안 함 — 건물마다 어긋남이 달라요(${(D[D.length-1]-D[0]).toFixed(0)}°)`; }
   S.userOff+=wrap((S.alphaOff??0)-(q.aOff0??0));   // v3.11 답을 기다리는 동안 나침반이 움직인 만큼은 되돌린다 — 사진을 찍은 순간을 기준으로 맞춘다
-  if(Math.abs(m)<0.7){ calibrated(); return auto?'🧭 방향 확인 — 정확해요':`🧭 방향 정확(${fmtD(m)})`; }
-  S.userOff-=m; calibrated();
+  S.lastFix=Math.abs(m)<0.7?0:m; logAdj({...rec,r:'ok',v:+(-S.lastFix).toFixed(1)});
+  if(Math.abs(m)<0.7){ calibrated(auto?'auto':'ai'); return auto?'🧭 방향 확인 — 정확해요':`🧭 방향 정확(${fmtD(m)})`; }
+  S.userOff-=m; calibrated(auto?'auto':'ai');
   return auto?`🧭 방향을 자동으로 맞췄어요 (${fmtD(-m)} · 건물 ${In.length}개)`:`🧭 자동 보정 ${fmtD(-m)} (건물 ${In.length}개 기준)`;
 }
 
@@ -640,29 +644,34 @@ function aiFix(q,auto){
    · 폰이 1초쯤 가만히 지평선 근처를 보고, 건물 후보가 둘 이상일 때 묻는다.
    · 건물 둘 이상이 같은 만큼 어긋나 있어야만 맞춘다(하나만 보고는 움직이지 않는다).
    · 못 맞추면 다른 쪽을 볼 때 두 번까지 더 해 보고 그만둔다(한 번 켤 때 최대 3장). 손으로 끌어 맞췄으면 하지 않는다. */
-const AUTO={n:0,last:0,hdg:0,done:false,st:[],t0:0,err:false};
+const AUTO={n:0,last:0,hdg:0,done:false,st:[],t0:0,err:false,refine:false};   // refine = 크게 돌린 뒤 «한 번 더 확인» 기다리는 중(v3.13)
 const autoOn=()=>!!localStorage.aiUrl&&localStorage.autoCal!=='0';
 function autoTick(){
   if(AUTO.done||S.aiBusy||drag||!autoOn()||$('hud').hidden||document.hidden) return;
-  if(S.hold||AUTO.n>=3){ AUTO.done=true; return; }                       // 이미 맞췄거나(끌기·🔍) 세 번 해 봤다
+  if(AUTO.n>=3||(S.hold&&!AUTO.refine)){ AUTO.done=true; AUTO.refine=false; return; }   // 이미 맞췄거나(끌기·🔍) 세 번 해 봤다
   const B=camBasis(); if(!B||!S.M||S.cmpOff==null||!$('cam').videoWidth||!S.blds.length){ AUTO.st.length=0; return; }
   const h=headingOf(B.v), p=Math.asin(Math.max(-1,Math.min(1,B.v[2])))/D2R, now=Date.now();
   AUTO.st.push([h,p]); if(AUTO.st.length>3) AUTO.st.shift();
   if(AUTO.st.length<3||AUTO.st.some(s=>Math.abs(wrap(s[0]-h))>2.5||Math.abs(s[1]-p)>2.5)||p<-20||p>35) return;   // 1초쯤 가만히, 땅·하늘만 보고 있지 않을 때
   if(S.labels.filter(l=>!l.peak).length+S.dots.length<2) return;         // 건물 후보가 둘은 있어야 한다
   AUTO.t0=AUTO.t0||now; if((kq.length||kBusy)&&now-AUTO.t0<6000) return;  // 건물 이름(카카오)을 받는 중이면 6초까지 기다린다
-  if(AUTO.n&&(AUTO.err?now-AUTO.last<5000:(now-AUTO.last<12000||(Math.abs(wrap(h-AUTO.hdg))<15&&now-AUTO.last<40000)))) return;   // 다시 물을 때: AI 서버가 바빴으면 5초 뒤, 건물을 못 알아봤으면 12초 뒤 다른 쪽(15°)을 볼 때나 40초 뒤
+  if(AUTO.n&&(AUTO.refine?now-AUTO.last<2500:AUTO.err?now-AUTO.last<5000:(now-AUTO.last<12000||(Math.abs(wrap(h-AUTO.hdg))<15&&now-AUTO.last<40000)))) return;   // 다시 확인은 2.5초 뒤   // 다시 물을 때: AI 서버가 바빴으면 5초 뒤, 건물을 못 알아봤으면 12초 뒤 다른 쪽(15°)을 볼 때나 40초 뒤
   autoCal(h);
 }
 async function autoCal(h){
   S.aiBusy=true; AUTO.n++; AUTO.last=Date.now(); AUTO.hdg=h; AUTO.err=false; const off0=S.userOff, giveUp='🧭 방향 자동 맞춤을 못 했어요 — 화면을 좌우로 끌어 맞추세요', busy='🧭 방향 자동 맞춤: AI가 바빠요 — 잠시 뒤 다시 해 봅니다';
   status('🧭 방향을 자동으로 맞추는 중…'); let a;
   try{ a=await aiAsk(s=>{ if(!S.hold&&!drag) status(`🧭 방향을 자동으로 맞추는 중… ${s}초`); },45); }   // Worker 가 예비 모델까지 가면 15+25초
-  catch(e){ if(/암호/.test(e.message)){ AUTO.done=true; status('🧭 방향 자동 맞춤 못 함 — '+e.message); } else { AUTO.err=true; status(AUTO.n>=3?giveUp:busy); } return; }
+  catch(e){ if(AUTO.refine){ AUTO.refine=false; AUTO.done=true; return; }   // 다시 확인이 안 되면 첫 결과를 그대로 둔다
+    if(/암호/.test(e.message)){ AUTO.done=true; status('🧭 방향 자동 맞춤 못 함 — '+e.message); } else { AUTO.err=true; status(AUTO.n>=3?giveUp:busy); } return; }
   finally{ S.aiBusy=false; AUTO.last=Date.now(); }
-  if(S.hold||drag||S.userOff!==off0){ AUTO.done=true; return; }         // 기다리는 사이 손으로 맞췄다 → 그쪽을 따른다
-  if(a.res.error&&!(a.res.labels||[]).length){ AUTO.err=true; status(AUTO.n>=3?giveUp:busy); return; }   // Worker 가 «Gemini 붐빔·너무 늦음»을 알려 왔다
-  const fix=aiFix(a,true);
-  if(S.hold){ AUTO.done=true; status(fix); }
-  else status(AUTO.n>=3?giveUp:'🧭 방향 자동 맞춤: 건물을 확실히 못 알아봤어요 — 트인 쪽을 비추면 다시 해 봅니다');
+  const was=AUTO.refine;
+  if((S.hold&&!was)||drag||S.userOff!==off0){ AUTO.done=true; AUTO.refine=false; return; }   // 기다리는 사이 손으로 맞췄다 → 그쪽을 따른다
+  if(a.res.error&&!(a.res.labels||[]).length){ if(was){ AUTO.refine=false; AUTO.done=true; return; } AUTO.err=true; status(AUTO.n>=3?giveUp:busy); return; }   // Worker 가 «Gemini 붐빔·너무 늦음»을 알려 왔다
+  S.lastFix=null; const fix=aiFix(a,true), m=S.lastFix;
+  // v3.13 크게(3°↑) 돌렸으면 한 번 더 확인한다 — AI 는 건넨 «계산상 자리»에 끌려 덜 돌리는 일이 있다(11-17 광화문: 자동 −8° 뒤 손으로 −5° 더). 최대 3장 안에서
+  if(m!=null&&Math.abs(m)>=3&&AUTO.n<3){ AUTO.refine=true; status(fix+' · 한 번 더 확인할게요'); return; }
+  if(m!=null){ AUTO.done=true; AUTO.refine=false; status(was?(Math.abs(m)<0.7?'🧭 다시 확인 — 방향이 맞아요':`🧭 다시 확인 — ${fmtD(-m)} 더 맞췄어요`):fix); return; }
+  if(was){ AUTO.done=true; AUTO.refine=false; status('🧭 방향을 자동으로 맞췄어요'); return; }   // 다시 확인이 애매하면 첫 결과를 그대로 둔다
+  status(AUTO.n>=3?giveUp:'🧭 방향 자동 맞춤: 건물을 확실히 못 알아봤어요 — 트인 쪽을 비추면 다시 해 봅니다');
 }
