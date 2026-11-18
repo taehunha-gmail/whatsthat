@@ -2,6 +2,13 @@
 const ALLOWED_ORIGIN = "https://taehunha-gmail.github.io";
 const MAX_BODY_BYTES = 3 * 1024 * 1024; // 3 MB
 const MODEL_RE = /^gemini-[a-z0-9.\-]{1,40}$/i;   // 점검·시험 때 넘겨받는 모델 이름은 이 꼴만
+const SKIP_MS = 5 * 60 * 1000;   // ★11 기본 모델이 붐빔·무응답이면 5분 동안은 묻지 않고 바로 예비 모델로(11-17~19 3.6 Flash 가 반나절 넘게 503)
+let primaryDownUntil = 0;        //     Worker 안에서 잠깐 기억하는 값(Cloudflare 가 Worker 를 새로 띄우면 잊는다 — 그러면 한 번 더 물어보고 다시 기억)
+// ★12 답 형식을 정해 둔다 — 가벼운 모델이 위치(box_2d)를 자주 빠뜨렸다(11-19 시험 5번 중 2번)
+const SCHEMA = { type: "OBJECT", required: ["view", "labels"], properties: {
+  view: { type: "STRING", enum: ["open", "blocked", "dark"] },
+  labels: { type: "ARRAY", items: { type: "OBJECT", required: ["key", "name", "box_2d", "conf"], properties: {
+    key: { type: "STRING" }, name: { type: "STRING" }, box_2d: { type: "ARRAY", items: { type: "INTEGER" } }, conf: { type: "NUMBER" } } } } } };
 
 export default {
   async fetch(request, env) {
@@ -70,20 +77,30 @@ export default {
       y: typeof c.y === "number" ? Math.round(c.y / h * 1000) : undefined }));
 
     // ★2 지시문 좌표 표현을 0~1000 으로 통일(원래 «픽셀»과 섞여 있었음)
-    const prompt = `사진은 서울에서 폰 카메라로 찍은 풍경이다. 아래 후보는 GPS·나침반·지도로 계산한 «화면 안에 있을 수 있는 건물» 목록이고, x·y는 계산상 사진 속 위치다(0~1000 정규화, 오차 있음). 먼저 사진 전체를 보고 view 를 정하라: 바깥 풍경(건물·하늘·먼 경치)이 보이면 "open", 실내 벽·천장·가구·사람·바로 앞 물건만 보이거나 창이 막혀 바깥이 거의 안 보이면 "blocked", 너무 어둡거나 흔들려 무엇인지 알아볼 수 없으면 "dark". 그다음 사진에 실제로 보이는 후보만 골라라. 가려졌거나 안 보이면 빼라. 보이는 것은 사진 속 실제 위치를 box_2d [ymin, xmin, ymax, xmax](0~1000)로 적어라. 후보에 없는 건물은 지어내지 마라. 확신도 conf(0~1)를 붙여라. 같은 단지의 비슷한 동처럼 구별이 안 되면 단지 이름 하나만 남겨라. 출력은 JSON 하나만: {"view":"open|blocked|dark","labels":[{"key":…,"name":…,"box_2d":[ymin,xmin,ymax,xmax],"conf":…}]}
+    const prompt = `사진은 서울에서 폰 카메라로 찍은 풍경이다. 아래 후보는 GPS·나침반·지도로 계산한 «화면 안에 있을 수 있는 건물» 목록이고, x·y는 계산상 사진 속 위치다(0~1000 정규화, 오차 있음). 먼저 사진 전체를 보고 view 를 정하라: 바깥 풍경(건물·하늘·먼 경치)이 보이면 "open", 실내 벽·천장·가구·사람·바로 앞 물건만 보이거나 창이 막혀 바깥이 거의 안 보이면 "blocked", 너무 어둡거나 흔들려 무엇인지 알아볼 수 없으면 "dark". 그다음 사진에 실제로 보이는 후보만 골라라. 가려졌거나 안 보이면 빼라. 보이는 것은 하나도 빠짐없이 사진 속 실제 위치를 box_2d [ymin, xmin, ymax, xmax](0~1000)로 적어라(box_2d 없는 항목은 쓰지 마라). 후보에 없는 건물은 지어내지 마라. 확신도 conf(0~1)를 붙여라. 같은 단지의 비슷한 동처럼 구별이 안 되면 단지 이름 하나만 남겨라. 출력은 JSON 하나만: {"view":"open|blocked|dark","labels":[{"key":…,"name":…,"box_2d":[ymin,xmin,ymax,xmax],"conf":…}]}
 
 [후보 건물 목록]
 ${JSON.stringify(cands)}`;
 
     const body = { contents: [{ role: "user", parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }] }],
-                   generationConfig: { response_mime_type: "application/json", thinkingConfig: { thinkingLevel: "low" } } };   // ★6 생각은 짧게 — 오래 생각하면 수십 초
+                   generationConfig: { response_mime_type: "application/json", response_schema: SCHEMA, thinkingConfig: { thinkingLevel: "low" } } };   // ★6 생각은 짧게 — 오래 생각하면 수십 초
+    const noSchema = () => { const b = JSON.parse(JSON.stringify(body)); delete b.generationConfig.response_schema; return b; };
+    // 형식을 못 받아들이는 모델이면(400) 형식 없이 한 번 더
+    const ask = async (model, ms) => { let R = await callG(model, body, ms); tries.push(R); if (!R.ok && R.status === 400) { R = await callG(model, noSchema(), ms); tries.push(R); } return R; };
+    const tries = [];
     try {
       // ★3 키는 헤더로. ★9 붐비면(503·429·500, 대개 잠깐) 1.2초 쉬고 같은 모델로 한 번 더(11-17 저녁 내내 503) → ★5 그래도 안 되거나 늦으면 예비 모델(GEMINI_FALLBACK)
-      const t0 = Date.now(), tries = [], first = typeof p.model === "string" && MODEL_RE.test(p.model) ? p.model : env.GEMINI_MODEL;   // p.model = 시험용(앱은 안 보냄)
-      const busy = R => [429, 500, 503].includes(R.status);
-      let R = await callG(first, body, 14000); tries.push(R);
-      if (!R.ok && busy(R) && R.ms < 6000) { await new Promise(z => setTimeout(z, 1200)); R = await callG(first, body, 14000); tries.push(R); }
-      if (!R.ok && env.GEMINI_FALLBACK && env.GEMINI_FALLBACK !== first && (busy(R) || R.status === "timeout")) { R = await callG(env.GEMINI_FALLBACK, body, 20000); tries.push(R); }
+      const t0 = Date.now(), test = typeof p.model === "string" && MODEL_RE.test(p.model), first = test ? p.model : env.GEMINI_MODEL;   // p.model = 시험용(앱은 안 보냄)
+      const busy = R => [429, 500, 503].includes(R.status), fb = env.GEMINI_FALLBACK && env.GEMINI_FALLBACK !== first ? env.GEMINI_FALLBACK : "";
+      let R;
+      if (!test && fb && Date.now() < primaryDownUntil) {   // ★11 최근에 기본 모델이 막혔다 → 바로 예비 모델(그래도 안 되면 기본 모델에 한 번)
+        R = await ask(fb, 20000); if (!R.ok) { R = await ask(first, 14000); if (R.ok) primaryDownUntil = 0; } }
+      else {
+        R = await ask(first, 14000);
+        if (!R.ok && busy(R) && R.ms < 6000) { await new Promise(z => setTimeout(z, 1200)); R = await ask(first, 14000); }
+        if (!R.ok && (busy(R) || R.status === "timeout")) { if (!test) primaryDownUntil = Date.now() + SKIP_MS; if (fb) R = await ask(fb, 20000); }
+        else if (R.ok && !test) primaryDownUntil = 0;
+      }
       const how = tries.map(x => `${x.model} ${x.ok ? "OK" : x.status} ${(x.ms / 1000).toFixed(1)}초`).join(" → ");
       // ★4 실패 이유를 앱에 돌려준다
       if (!R.ok) { const hint = R.status === 503 ? "Gemini 가 붐빔" : R.status === 429 ? "사용 한도 초과" : R.status === "timeout" ? "너무 늦음" : "";

@@ -61,6 +61,8 @@ OSM 원본 타일을 만든 `tiles.py` 는 남아 있지 않다. 다시 만들�
 - 주소: `https://weathered-queen.taehun-ha.workers.dev` (앱 ⚙︎ «AI 확인 주소»에 넣음)
 - 변수: `GEMINI_MODEL`=`gemini-3.6-flash`(Text) · `GEMINI_API_KEY`(Secret, 돕세 계정 AI Studio) · `APP_TOKEN`(Secret, 앱 ⚙︎ «AI 암호»와 같게) · `GEMINI_FALLBACK`(선택, 지금 없음)
 - 동작: 토큰 확인(X-App-Token) → CORS 는 github.io 만 → 기본 모델 14초 → 붐빔(429·500·503)이 빨리 오면 1.2초 쉬고 같은 모델로 한 번 더(★9, v3.15) → 그래도 붐빔·시간 초과면 예비 모델 20초 → `{labels:[{key,name,x,y,conf}], view, how, ms}`. `view` = open(바깥 보임)/blocked(실내·벽)/dark(어두움·흔들림)(★10, v3.15). 오류면 `{labels:[], error, how}`.
+- ★11(11-19): 기본 모델이 붐빔·무응답으로 예비 모델로 넘어가면 **5분 동안은 기본 모델을 건너뛰고 바로 예비 모델**(Worker 모듈 변수 `primaryDownUntil` — Cloudflare 가 Worker 를 새로 띄우면 잊음, 그러면 한 번 더 묻고 다시 기억). 예비도 막히면 기본에 한 번, 기본이 되면 건너뛰기 해제. 3.6 이 막힌 날 15초 → 2~5초.
+- ★12(11-19): `response_schema` 로 답 형식 고정(view 필수·labels 마다 box_2d 필수) — Lite 가 위치를 자주 빠뜨렸다. 모델이 형식을 거절하면(400) 형식 없이 한 번 더. **실제 API 로는 아직 시험 전**(사용자가 붙여 넣은 뒤 확인할 것: 400 이 나는지, Lite 위치 누락이 줄었는지).
 - 점검: `POST {"diag":true}` → 사진 없이 모델 상태·걸린 시간. `{"diag":true,"models":[…]}` → 그 모델들(최대 6, 이름 꼴 검사)을 시험 — 예비 모델 고르기. 사진 요청에 `model` 을 넣으면 그 모델로(시험용, 앱은 안 보냄). `POST {}` → AI 를 부르지 않고 바로 `{labels:[]}` (암호만 확인 — 앱 ⚙︎ 창이 이걸로 ✅/❌ 를 보여 준다).
 - **모델 교훈**: `gemini-3.8-flash` 는 나온 직후라 늘 503·무응답(25초+). `gemini-3.6-flash` 는 보통 사진 1.5~3.6초, 위치 정확. 다만 날에 따라 느리다 — 11-16 아침 글만 물어도 7~16초, 13시(KST) 21~25초·시간 초과, 20시 503 «high demand». 그럴 때 자동 맞춤은 실패하고 «끌어 맞추세요»로 넘어간다. 대비책 후보: `GEMINI_FALLBACK` 에 다른 모델(예: `gemini-3.5-flash-lite` — 문서상 안정판, 위치 정확도는 아직 안 재 봄)을 넣기. Gemini 3.x 는 `temperature` 를 넣으면 400.
 - 코드를 바꾸면 사용자가 Cloudflare **Edit code → 전부 지우고 붙여 넣기 → Deploy** 해야 한다(GitHub 연결 안 됨). 되도록 변수만 바꾸는 쪽으로.
@@ -90,7 +92,8 @@ OSM 원본 타일을 만든 `tiles.py` 는 남아 있지 않다. 다시 만들�
 - 알려진 한계: 나침반 오차(실내·철근 근처 5~20°) → 끌기·🔍 로 맞춤(자동으로는 못 잡는다). 가로수·간판은 지도에 없어 가림 판단 못 함. GPS ±10~20 m. 데이터는 스냅샷. «전부» 모드에서 바로 앞 큰 건물은 이름표 자리가 조금씩 옮겨 다닌다.
 
 ## 6. 다음 할 일
-1. **사용자가 Worker 코드를 새로 붙여 넣어야 v3.15 의 실내 판정·붐빔 한 번 더가 된다**(아직이면 앱은 v3.14 처럼 실내를 모름 — 흐림만 유지). 붙여 넣은 뒤: `{"diag":true,"models":["gemini-3.5-flash","gemini-3.5-flash-lite","gemini-flash-latest","gemini-flash-lite-latest","gemini-3.7-flash"]}` 로 살아 있는 모델·속도를 보고, 11-15 사진(이름표 지운 것)으로 `model` 을 바꿔 가며 위치 정확도를 재서 `GEMINI_FALLBACK` 을 정한다. 11-17 밤 사진 둘(방 안 → blocked 기대, 밤 창가 → dark/open)로 view 도 확인.
+0. (11-19) Worker ★11·★12 를 사용자가 붙여 넣으면: 11-15 사진(`p1115/req.json` 꼴, 이름표 지운 것)으로 3.6·Lite 각각 몇 번 물어 위치 누락·정확도를 다시 재고, 3.6 이 막힌 동안 두 번째 요청부터 Lite 로 바로 가는지(how 에 3.6 이 안 찍힘) 확인. GEMINI_FALLBACK=gemini-flash-lite-latest 는 11-19 설정 완료.
+1. (완료 11-19) 사용자가 Worker 코드를 새로 붙여 넣어 v3.15 의 실내 판정·붐빔 한 번 더가 동작 — 방 안 사진 → view blocked 확인.(아직이면 앱은 v3.14 처럼 실내를 모름 — 흐림만 유지). 붙여 넣은 뒤: `{"diag":true,"models":["gemini-3.5-flash","gemini-3.5-flash-lite","gemini-flash-latest","gemini-flash-lite-latest","gemini-3.7-flash"]}` 로 살아 있는 모델·속도를 보고, 11-15 사진(이름표 지운 것)으로 `model` 을 바꿔 가며 위치 정확도를 재서 `GEMINI_FALLBACK` 을 정한다. 11-17 밤 사진 둘(방 안 → blocked 기대, 밤 창가 → dark/open)로 view 도 확인.
 2. v3.14 «눈에 보이는 건물만» 실기기 시험 — 멈춰서 보면 몇 초 뒤 흐린 이름표가 ✓ 로 바뀌고 가려진 건물이 지워지는지, 사진이 너무 자주 나가지 않는지. v3.10·v3.11 확인도 같이. 찰칵 → 드라이브(4-1) 설정을 사용자가 마치면 세션에서 Worker 로 `POST {}` 해 `drive:true` 를 확인하고, 드라이브 도구로 «저게뭐야 사진» 폴더를 본다.
 2. Gemini 가 느린 날 대비: 예비 모델(`GEMINI_FALLBACK`)을 하나 정해 위치 정확도·속도를 재 보고 넣기(변수만 바꾸면 된다).
 3. 경기·인천 GIS건물통합정보(AL_D010_41·_28)를 받아 `tool/merge_gis.py` 로 합치기.
